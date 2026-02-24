@@ -380,13 +380,13 @@ elif menu == "매니저 화면 (로그인)":
             st.markdown(f"""
             <div class='toss-header'>
                 <h1 class='toss-title'>{manager_name} <span class='toss-subtitle'>({manager_code_clean})</span></h1>
-                <p class='toss-desc'>환영합니다! 산하 설계사분들의 맞춤 실적 현황입니다. 🚀</p>
+                <p class='toss-desc'>환영합니다! 산하 팀장분들의 실적 현황입니다. 🚀</p>
             </div>
             """, unsafe_allow_html=True)
             
             display_cols = []
             
-            # (1) 일반 항목 표시 (에러 방지용 완전방어 로직)
+            # (1) 일반 항목 표시 (숫자 콤마 제거 및 완벽 변환 후 필터)
             for item in st.session_state['admin_cols']:
                 orig_col = item['col']
                 disp_col = item.get('display_name', orig_col)
@@ -394,10 +394,11 @@ elif menu == "매니저 화면 (로그인)":
                 if item['type'] == '숫자' and item['condition']:
                     try:
                         temp_df = my_df.copy()
-                        temp_df[orig_col] = pd.to_numeric(temp_df[orig_col], errors='coerce').fillna(0)
+                        # 콤마 제거 후 숫자 변환 (10,000 -> 10000)
+                        cleaned_str = temp_df[orig_col].astype(str).str.replace(',', '', regex=False)
+                        temp_df[orig_col] = pd.to_numeric(cleaned_str, errors='coerce').fillna(0)
                         mask = temp_df.eval(f"`{orig_col}` {item['condition']}")
                         
-                        # [핵심] Pandas 버전에 따른 Series/DataFrame 강제 Boolean 변환 처리
                         if isinstance(mask, pd.Series):
                             mask = mask.fillna(False).astype(bool)
                         else:
@@ -413,7 +414,10 @@ elif menu == "매니저 화면 (로그인)":
             # (2) 목표 구간 처리
             for g_col, tiers in st.session_state['admin_goals'].items():
                 if g_col in my_df.columns:
-                    my_df[g_col] = pd.to_numeric(my_df[g_col], errors='coerce').fillna(0)
+                    # 콤마 제거 후 숫자 변환
+                    cleaned_str = my_df[g_col].astype(str).str.replace(',', '', regex=False)
+                    my_df[g_col] = pd.to_numeric(cleaned_str, errors='coerce').fillna(0)
+                    
                     def calc_shortfall(val):
                         for t in tiers:
                             if val < t:
@@ -427,7 +431,7 @@ elif menu == "매니저 화면 (로그인)":
                     if next_target_col not in display_cols:
                         display_cols.extend([next_target_col, shortfall_col])
 
-            # (3) 맞춤분류(태그) 설정 (Boolean 충돌 완벽 방지 로직)
+            # (3) 맞춤분류(태그) 설정 (텍스트/숫자 콤마 혼동 완벽 방지)
             if st.session_state['admin_categories']:
                 if '맞춤분류' not in my_df.columns:
                     my_df['맞춤분류'] = ""
@@ -443,28 +447,27 @@ elif menu == "매니저 화면 (로그인)":
                         c_cond = cond_info['cond']
                         
                         try:
-                            # 문자 포함 산식 계산 시도
+                            # 1단계: 문자 그대로 (텍스트 평가용)
                             mask = my_df.eval(f"`{c_col}` {c_cond}")
-                            # 완벽한 Boolean Series 강제화
                             if isinstance(mask, pd.Series):
                                 mask = mask.fillna(False).astype(bool)
                             else:
                                 mask = pd.Series(bool(mask), index=my_df.index)
                         except Exception:
                             try:
-                                # 문자가 섞인 숫자열을 0으로 처리한 뒤 계산 시도
+                                # 2단계: 콤마(,) 제거 후 숫자로 완벽 변환 (숫자 평가용)
                                 temp_df = my_df.copy()
-                                temp_df[c_col] = pd.to_numeric(temp_df[c_col], errors='coerce').fillna(0)
+                                cleaned_str = temp_df[c_col].astype(str).str.replace(',', '', regex=False)
+                                temp_df[c_col] = pd.to_numeric(cleaned_str, errors='coerce').fillna(0)
+                                
                                 mask = temp_df.eval(f"`{c_col}` {c_cond}")
                                 if isinstance(mask, pd.Series):
                                     mask = mask.fillna(False).astype(bool)
                                 else:
                                     mask = pd.Series(bool(mask), index=temp_df.index)
                             except Exception:
-                                # 그래도 실패하면 False로 처리하여 에러 방지
                                 mask = pd.Series(False, index=my_df.index)
                                 
-                        # 이제 완벽하게 Series(True/False)와 Series(True/False)만 결합됨
                         final_mask = final_mask & mask
                         
                     my_df.loc[final_mask, '맞춤분류'] += f"[{c_name}] "
@@ -478,8 +481,8 @@ elif menu == "매니저 화면 (로그인)":
             ji_cols = [c for c in display_cols if '지사명' in c]
             if not ji_cols: ji_cols = [c for c in my_df.columns if '지사명' in c]
             if ji_cols: sort_keys.append(ji_cols[0])
-            gender_name_cols = [c for c in display_cols if '성별' in c or '설계사명' in c or '성명' in c or '이름' in c]
-            if not gender_name_cols: gender_name_cols = [c for c in my_df.columns if '성별' in c or '설계사명' in c or '성명' in c]
+            gender_name_cols = [c for c in display_cols if '성별' in c or '설계사명' in c or '성명' in c or '이름' in c or '팀장명' in c]
+            if not gender_name_cols: gender_name_cols = [c for c in my_df.columns if '성별' in c or '설계사명' in c or '성명' in c or '팀장명' in c]
             if gender_name_cols: sort_keys.append(gender_name_cols[0])
             if sort_keys:
                 my_df = my_df.sort_values(by=sort_keys, ascending=[True] * len(sort_keys))
@@ -499,13 +502,15 @@ elif menu == "매니저 화면 (로그인)":
             else:
                 final_df = my_df[ordered_final_cols].copy()
                 
-                # 5. 세 자리 콤마(,) 포맷팅
+                # 5. 세 자리 콤마(,) 포맷팅 안전 처리
                 for c in final_df.columns:
                     if '코드' not in c and '연도' not in c:
                         def format_with_comma(val):
                             try:
                                 if pd.isna(val) or str(val).strip() == "": return ""
-                                num = float(val)
+                                # 텍스트 안의 콤마를 지우고 숫자 파싱
+                                clean_val = str(val).replace(',', '')
+                                num = float(clean_val)
                                 if num == 0: return "0"
                                 if num.is_integer(): return f"{int(num):,}"
                                 return f"{num:,.1f}"
