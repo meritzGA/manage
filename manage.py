@@ -142,7 +142,13 @@ def load_data_and_config():
             st.session_state['manager_name_col'] = str(data.get('manager_name_col', ""))
             st.session_state['manager_col2'] = str(data.get('manager_col2', ""))
             st.session_state['admin_cols'] = data.get('admin_cols', []) if isinstance(data.get('admin_cols'), list) else []
-            st.session_state['admin_goals'] = data.get('admin_goals', {}) if isinstance(data.get('admin_goals'), dict) else {}
+            st.session_state['admin_goals'] = data.get('admin_goals', [])
+            # 기존 dict 형태 → list 형태 자동 변환
+            if isinstance(st.session_state['admin_goals'], dict):
+                st.session_state['admin_goals'] = [
+                    {"target_col": k, "ref_col": "", "tiers": v} 
+                    for k, v in st.session_state['admin_goals'].items()
+                ]
             st.session_state['admin_categories'] = data.get('admin_categories', []) if isinstance(data.get('admin_categories'), list) else []
             st.session_state['col_order'] = data.get('col_order', []) if isinstance(data.get('col_order'), list) else []
             st.session_state['merge_key1_col'] = str(data.get('merge_key1_col', ''))
@@ -165,7 +171,7 @@ def _reset_session_state():
     st.session_state['manager_name_col'] = ""
     st.session_state['manager_col2'] = ""
     st.session_state['admin_cols'] = []
-    st.session_state['admin_goals'] = {}
+    st.session_state['admin_goals'] = []
     st.session_state['admin_categories'] = []
     st.session_state['col_order'] = []
     st.session_state['merge_key1_col'] = ''
@@ -183,7 +189,7 @@ def save_data_and_config():
         'manager_name_col': st.session_state.get('manager_name_col', ""),
         'manager_col2': st.session_state.get('manager_col2', ""),
         'admin_cols': st.session_state.get('admin_cols', []),
-        'admin_goals': st.session_state.get('admin_goals', {}),
+        'admin_goals': st.session_state.get('admin_goals', []),
         'admin_categories': st.session_state.get('admin_categories', []),
         'col_order': st.session_state.get('col_order', []),
         'merge_key1_col': st.session_state.get('merge_key1_col', ''),
@@ -561,11 +567,17 @@ if menu == "관리자 화면 (설정)":
                                 valid_admin_cols.append(item)
                         st.session_state['admin_cols'] = valid_admin_cols
                         
-                        # admin_goals 검증
-                        st.session_state['admin_goals'] = {
-                            k: v for k, v in st.session_state['admin_goals'].items()
-                            if k in new_cols
-                        }
+                        # admin_goals 검증 (list 형태)
+                        goals = st.session_state.get('admin_goals', [])
+                        if isinstance(goals, dict):
+                            goals = [{"target_col": k, "ref_col": "", "tiers": v} for k, v in goals.items()]
+                        valid_goals = []
+                        for goal in goals:
+                            if goal['target_col'] in new_cols:
+                                if goal.get('ref_col') and goal['ref_col'] not in new_cols:
+                                    goal['ref_col'] = ''
+                                valid_goals.append(goal)
+                        st.session_state['admin_goals'] = valid_goals
                         
                         # admin_categories 검증 - 모든 조건 열이 존재하는 것만 유지
                         valid_cats = []
@@ -662,26 +674,50 @@ if menu == "관리자 화면 (설정)":
         st.divider()
 
         # ========================================
-        st.header("4. 목표 구간 다중 설정")
-        c1, c2, c3 = st.columns([3, 5, 2])
-        with c1: goal_col = st.selectbox("목표 구간을 적용할 항목", available_columns, key="sec4_col")
-        with c2: goal_tiers = st.text_input("구간 금액 입력 (예: 100000, 200000)", key="sec4_tiers")
-        with c3:
+        st.header("4. 목표 구간 설정 (기준열 연동 가능)")
+        st.caption("기준 열(A)을 설정하면, A값이 B 목표의 상한선이 됩니다. (예: A=40만이면 B의 최대 목표도 40만)")
+        c1, c2 = st.columns(2)
+        with c1: 
+            goal_target = st.selectbox("목표를 적용할 항목 (B열)", available_columns, key="sec4_target")
+        with c2:
+            goal_ref_options = ["(없음 - 고정 구간)"] + available_columns
+            goal_ref = st.selectbox("기준 열 (A열) — B의 최소 목표 기준", goal_ref_options, key="sec4_ref")
+        c3, c4 = st.columns([7, 1])
+        with c3: goal_tiers = st.text_input("구간 금액 입력 (예: 200000, 400000, 600000)", key="sec4_tiers")
+        with c4:
             st.write(""); st.write("")
-            if st.button("➕ 구간 추가", key="btn_add_goal"):
+            if st.button("➕ 추가", key="btn_add_goal"):
                 if goal_tiers:
-                    tiers_list = [float(x.strip()) for x in goal_tiers.split(",") if x.strip().isdigit()]
-                    st.session_state['admin_goals'][goal_col] = sorted(tiers_list)
-                    save_data_and_config()
-                    st.rerun()
+                    tiers_list = [float(x.strip()) for x in goal_tiers.split(",") if x.strip().replace('.','',1).isdigit()]
+                    if tiers_list:
+                        ref = goal_ref if goal_ref != "(없음 - 고정 구간)" else ""
+                        # admin_goals를 list 형태로 관리
+                        goals = st.session_state.get('admin_goals', [])
+                        if isinstance(goals, dict):
+                            goals = [{"target_col": k, "ref_col": "", "tiers": v} for k, v in goals.items()]
+                        goals.append({"target_col": goal_target, "ref_col": ref, "tiers": sorted(tiers_list)})
+                        st.session_state['admin_goals'] = goals
+                        save_data_and_config()
+                        st.rerun()
                 
-        if st.session_state['admin_goals']:
-            for g_col, tiers in list(st.session_state['admin_goals'].items()):
+        # 기존 dict 형태 → list 형태 자동 변환
+        goals = st.session_state.get('admin_goals', [])
+        if isinstance(goals, dict):
+            goals = [{"target_col": k, "ref_col": "", "tiers": v} for k, v in goals.items()]
+            st.session_state['admin_goals'] = goals
+            save_data_and_config()
+        
+        if goals:
+            for i, goal in enumerate(goals):
                 row_c1, row_c2 = st.columns([8, 2])
-                with row_c1: st.markdown(f"- **{g_col}**: {tiers}")
+                with row_c1:
+                    ref_text = f" (상한: **{goal['ref_col']}** 값까지)" if goal.get('ref_col') else " (고정 구간)"
+                    tiers_display = [f"{int(t)//10000}만" if t % 10000 == 0 else f"{t:,.0f}" for t in goal['tiers']]
+                    st.markdown(f"- **{goal['target_col']}** → 구간: {', '.join(tiers_display)}{ref_text}")
                 with row_c2:
-                    if st.button("❌ 삭제", key=f"del_goal_{g_col}"):
-                        del st.session_state['admin_goals'][g_col]
+                    if st.button("❌ 삭제", key=f"del_goal_{i}"):
+                        goals.pop(i)
+                        st.session_state['admin_goals'] = goals
                         save_data_and_config()
                         st.rerun()
 
@@ -731,7 +767,8 @@ if menu == "관리자 화면 (설정)":
         expected_cols = []
         if st.session_state['admin_categories']: expected_cols.append("맞춤분류")
         for item in st.session_state['admin_cols']: expected_cols.append(item.get('display_name', item['col']))
-        for g_col in st.session_state['admin_goals'].keys(): expected_cols.extend([f"{g_col} 다음목표", f"{g_col} 부족금액"])
+        for goal in (st.session_state['admin_goals'] if isinstance(st.session_state['admin_goals'], list) else []): 
+            expected_cols.extend([f"{goal['target_col']} 다음목표", f"{goal['target_col']} 부족금액"])
             
         current_order = st.session_state.get('col_order', [])
         valid_order = [c for c in current_order if c in expected_cols]
@@ -864,27 +901,57 @@ elif menu == "매니저 화면 (로그인)":
                 display_cols.append(disp_col)
             
             # -------------------------------------------------------------------
-            # (3) 목표 구간 처리 (20만 등 텍스트 변환)
+            # (3) 목표 구간 처리 (기준열 연동 지원)
             # -------------------------------------------------------------------
-            for g_col, tiers in st.session_state['admin_goals'].items():
-                if g_col in my_df.columns:
-                    cleaned_str = my_df[g_col].astype(str).str.replace(',', '', regex=False)
-                    my_df[g_col] = pd.to_numeric(cleaned_str, errors='coerce').fillna(0)
+            goals = st.session_state.get('admin_goals', [])
+            # 기존 dict 형태 호환
+            if isinstance(goals, dict):
+                goals = [{"target_col": k, "ref_col": "", "tiers": v} for k, v in goals.items()]
+            
+            for goal in goals:
+                g_col = goal['target_col']
+                ref_col = goal.get('ref_col', '')
+                tiers = goal['tiers']
+                
+                if g_col not in my_df.columns:
+                    continue
+                
+                # B열(target) 숫자 변환
+                cleaned_str = my_df[g_col].astype(str).str.replace(',', '', regex=False)
+                my_df[g_col] = pd.to_numeric(cleaned_str, errors='coerce').fillna(0)
+                
+                # A열(ref) 숫자 변환 (있는 경우)
+                if ref_col and ref_col in my_df.columns:
+                    ref_cleaned = my_df[ref_col].astype(str).str.replace(',', '', regex=False)
+                    my_df[ref_col] = pd.to_numeric(ref_cleaned, errors='coerce').fillna(0)
+                
+                def calc_shortfall(row):
+                    val = row[g_col]
                     
-                    def calc_shortfall(val):
-                        for t in tiers:
-                            if val < t:
-                                if t % 10000 == 0: tier_str = f"{int(t)//10000}만"
-                                else: tier_str = f"{t/10000:g}만"
-                                return pd.Series([tier_str, t - val])
-                        return pd.Series(["최고 구간 달성", 0])
+                    # 기준열(A)이 있으면, A값이 B 목표의 상한선
+                    if ref_col and ref_col in row.index:
+                        ref_val = row[ref_col]
+                        applicable_tiers = [t for t in tiers if t <= ref_val]
+                        if not applicable_tiers:
+                            # A값이 최소 구간보다 작으면 목표 없음
+                            return pd.Series(["목표 없음", 0])
+                    else:
+                        applicable_tiers = tiers
                     
-                    next_target_col = f"{g_col} 다음목표"
-                    shortfall_col = f"{g_col} 부족금액"
-                    
-                    my_df[[next_target_col, shortfall_col]] = my_df[g_col].apply(calc_shortfall)
-                    if next_target_col not in display_cols:
-                        display_cols.extend([next_target_col, shortfall_col])
+                    # 적용 가능한 구간 중 다음 목표 찾기
+                    for t in applicable_tiers:
+                        if val < t:
+                            if t % 10000 == 0: tier_str = f"{int(t)//10000}만"
+                            else: tier_str = f"{t/10000:g}만"
+                            return pd.Series([tier_str, t - val])
+                    return pd.Series(["최고 구간 달성", 0])
+                
+                next_target_col = f"{g_col} 다음목표"
+                shortfall_col = f"{g_col} 부족금액"
+                
+                my_df[[next_target_col, shortfall_col]] = my_df.apply(calc_shortfall, axis=1)
+                if next_target_col not in display_cols:
+                    display_cols.extend([next_target_col, shortfall_col])
 
             # 3. 데이터 정렬
             sort_keys = []
