@@ -129,12 +129,15 @@ iframe {
 # 1. 설정 및 데이터 영구 저장/불러오기 함수
 # ==========================================
 def load_data_and_config():
-    if os.path.exists(CONFIG_FILE):
+    # 메인 파일 시도 → 실패하면 백업 파일 시도
+    for filepath in [CONFIG_FILE, CONFIG_FILE + ".bak"]:
+        if not os.path.exists(filepath):
+            continue
         try:
-            with open(CONFIG_FILE, 'rb') as f:
+            with open(filepath, 'rb') as f:
                 data = pickle.load(f)
             if not isinstance(data, dict):
-                raise ValueError("Invalid config format")
+                continue
             
             df = data.get('df_merged', pd.DataFrame())
             st.session_state['df_merged'] = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
@@ -143,7 +146,6 @@ def load_data_and_config():
             st.session_state['manager_col2'] = str(data.get('manager_col2', ""))
             st.session_state['admin_cols'] = data.get('admin_cols', []) if isinstance(data.get('admin_cols'), list) else []
             st.session_state['admin_goals'] = data.get('admin_goals', [])
-            # 기존 dict 형태 → list 형태 자동 변환
             if isinstance(st.session_state['admin_goals'], dict):
                 st.session_state['admin_goals'] = [
                     {"target_col": k, "ref_col": "", "tiers": v} 
@@ -156,16 +158,14 @@ def load_data_and_config():
             st.session_state['col_groups'] = data.get('col_groups', []) if isinstance(data.get('col_groups'), list) else []
             st.session_state['data_date'] = str(data.get('data_date', ''))
             
-            # 기존 admin_cols에 fallback_col 키가 없으면 추가
             for item in st.session_state['admin_cols']:
                 if 'fallback_col' not in item:
                     item['fallback_col'] = ''
+            return  # 성공하면 바로 종료
         except Exception:
-            try:
-                os.remove(CONFIG_FILE)
-            except Exception:
-                pass
-            _reset_session_state()
+            continue
+    # 모든 시도 실패 시에만 초기화
+    _reset_session_state()
 
 def _reset_session_state():
     st.session_state['df_merged'] = pd.DataFrame()
@@ -201,8 +201,19 @@ def save_data_and_config():
         'col_groups': st.session_state.get('col_groups', []),
         'data_date': st.session_state.get('data_date', ''),
     }
-    with open(CONFIG_FILE, 'wb') as f:
-        pickle.dump(data, f)
+    try:
+        # 기존 파일 백업
+        import shutil
+        if os.path.exists(CONFIG_FILE):
+            shutil.copy2(CONFIG_FILE, CONFIG_FILE + ".bak")
+        # 임시 파일에 먼저 쓰고 → 이름 변경 (안전한 저장)
+        tmp_file = CONFIG_FILE + ".tmp"
+        with open(tmp_file, 'wb') as f:
+            pickle.dump(data, f)
+        shutil.move(tmp_file, CONFIG_FILE)
+    except Exception:
+        # 실패해도 세션 상태는 유지됨
+        pass
 
 if 'df_merged' not in st.session_state:
     _reset_session_state()
@@ -501,14 +512,44 @@ def render_html_table(df, col_groups=None):
 st.sidebar.title("메뉴")
 menu = st.sidebar.radio("이동할 화면을 선택하세요", ["매니저 화면 (로그인)", "관리자 화면 (설정)"])
 st.sidebar.divider()
-if st.sidebar.button("🔄 시스템 초기화 (오류 시)", type="secondary"):
-    try:
-        if os.path.exists(CONFIG_FILE):
-            os.remove(CONFIG_FILE)
-    except Exception:
-        pass
-    _reset_session_state()
-    st.rerun()
+with st.sidebar.expander("💾 설정 백업 / 복원"):
+    # 설정 다운로드
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, 'rb') as f:
+            st.download_button("⬇️ 현재 설정 백업 파일 다운로드", f.read(), 
+                             file_name="app_config_backup.pkl", mime="application/octet-stream")
+    # 설정 업로드 복원
+    restore_file = st.file_uploader("⬆️ 백업 파일로 복원", type=['pkl'], key="restore_pkl")
+    if restore_file is not None:
+        if st.button("복원 실행"):
+            try:
+                data = pickle.loads(restore_file.getvalue())
+                if isinstance(data, dict):
+                    with open(CONFIG_FILE, 'wb') as f:
+                        f.write(restore_file.getvalue())
+                    st.success("✅ 복원 완료! 새로고침됩니다.")
+                    import time; time.sleep(1)
+                    _reset_session_state()
+                    load_data_and_config()
+                    st.rerun()
+                else:
+                    st.error("유효하지 않은 백업 파일입니다.")
+            except Exception as e:
+                st.error(f"복원 실패: {e}")
+
+with st.sidebar.expander("⚠️ 시스템 초기화 (주의)"):
+    st.caption("모든 설정과 데이터가 삭제됩니다.")
+    confirm = st.text_input("초기화하려면 'reset'을 입력하세요", key="reset_confirm")
+    if st.button("🔄 초기화 실행", disabled=(confirm != "reset")):
+        try:
+            if os.path.exists(CONFIG_FILE):
+                import shutil
+                shutil.copy2(CONFIG_FILE, CONFIG_FILE + ".before_reset")
+                os.remove(CONFIG_FILE)
+        except Exception:
+            pass
+        _reset_session_state()
+        st.rerun()
 
 # ==========================================
 # 4. 관리자 화면 (Admin View)
@@ -667,11 +708,13 @@ if menu == "관리자 화면 (설정)":
         
         # ========================================
         st.header("2. 📅 데이터 기준일 설정")
-        current_date = st.session_state.get('data_date', '')
-        new_date = st.text_input("조회 화면에 표시할 기준일 (예: 2025.02.24)", value=current_date, key="sec2_date")
-        if new_date != current_date:
-            st.session_state['data_date'] = new_date
-            save_data_and_config()
+        with st.form("date_form"):
+            current_date = st.session_state.get('data_date', '')
+            new_date = st.text_input("조회 화면에 표시할 기준일 (예: 2025.02.24)", value=current_date)
+            if st.form_submit_button("저장"):
+                st.session_state['data_date'] = new_date
+                save_data_and_config()
+                st.rerun()
         
         # ========================================
         st.header("3. 매니저 로그인 및 이름 표시 열 설정")
