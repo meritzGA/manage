@@ -24,13 +24,15 @@ if 'admin_categories' not in st.session_state:
 # 2. 공통 함수
 # ==========================================
 def clean_special_chars(val):
-    """엑셀 특수문자 제거 및 .0(소수점) 텍스트 이슈 해결"""
-    if pd.isna(val):
+    """엑셀 특수문자 제거, 공백 제거, 대소문자 통일, .0 텍스트 이슈 완벽 해결"""
+    if pd.isna(val) or str(val).strip().lower() == 'nan':
         return ""
     val_str = str(val).strip()
     # 엑셀 특수문자(_x0033_ 등) 제거
     val_str = re.sub(r'_x[0-9a-fA-F]{4}_', '', val_str)
-    # 숫자로 인식되어 .0 이 붙은 경우 제거 (예: 18000498.0 -> 18000498)
+    # 모든 공백 제거 및 대문자 변환(검색 일치율 향상)
+    val_str = val_str.replace(" ", "").upper()
+    # 숫자로 인식되어 .0 이 붙은 경우 제거
     if val_str.endswith('.0'):
         val_str = val_str[:-2]
     return val_str
@@ -167,7 +169,7 @@ if menu == "관리자 화면 (설정)":
 
         # ========================================
         st.header("5. 맞춤형 분류(태그) 설정 (3개 조건 조합)")
-        st.markdown("최대 3개의 열을 조합할 수 있습니다. 조건이 필요 없는 항목은 산식에 **'상관없음'**이라고 적거나 **비워두세요.** (텍스트 조건은 `== '정상'` 형태로 기재)")
+        st.markdown("최대 3개의 열을 조합할 수 있습니다. 조건이 필요 없는 항목은 산식에 **'상관없음'**이라고 적거나 **비워두세요.**")
         
         with st.form("add_cat_form"):
             col1, col2 = st.columns(2)
@@ -185,7 +187,6 @@ if menu == "관리자 화면 (설정)":
             
             if submit_cat:
                 conditions = []
-                # 빈칸이거나 '상관없음' 이면 제외하고 유효한 조건만 묶기
                 if cat_cond1.strip() and cat_cond1.strip() != '상관없음':
                     conditions.append({"col": cat_col1, "cond": cat_cond1.strip()})
                 if cat_col2 != "(선택안함)" and cat_cond2.strip() and cat_cond2.strip() != '상관없음':
@@ -206,8 +207,12 @@ if menu == "관리자 화면 (설정)":
             for i, cat in enumerate(st.session_state['admin_categories']):
                 row_c1, row_c2 = st.columns([8, 2])
                 with row_c1:
-                    cond_strs = [f"`{c['col']}` {c['cond']}" for c in cat['conditions']]
-                    cond_display = " AND ".join(cond_strs)
+                    if 'conditions' in cat:
+                        cond_strs = [f"`{c['col']}` {c['cond']}" for c in cat['conditions']]
+                        cond_display = " AND ".join(cond_strs)
+                    else:
+                        cond_display = f"`{cat.get('col', '')}` {cat.get('condition', '')}"
+                        
                     st.markdown(f"- 조건: **{cond_display}** ➡️ **[{cat['name']}]** 태그 부여")
                 with row_c2:
                     if st.button("❌ 삭제", key=f"del_cat_{i}"):
@@ -235,24 +240,28 @@ elif menu == "매니저 화면 (로그인)":
         submit_login = st.form_submit_button("로그인 및 조회")
     
     if submit_login and manager_code:
-        # 매니저 코드 정제 (.0 제거 및 특수문자 제거)
+        # 데이터 클렌징
         df[manager_col] = df[manager_col].apply(clean_special_chars)
         manager_code_clean = clean_special_chars(manager_code)
         
-        my_df = df[df[manager_col].astype(str) == manager_code_clean].copy()
+        # 필터링 진행 (대소문자/공백/엑셀특수문자 모두 제거된 상태로 완벽 일치 검색)
+        my_df = df[df[manager_col] == manager_code_clean].copy()
         
-        # 만약 정확한 일치가 안된다면 contains로 한 번 더 체크 (유연성 확보)
+        # 완전 일치가 안 될 경우 포함(Contains) 조건으로 재검색
         if my_df.empty:
-            my_df = df[df[manager_col].astype(str).str.contains(manager_code_clean, na=False)].copy()
+            my_df = df[df[manager_col].str.contains(manager_code_clean, na=False)].copy()
 
         if my_df.empty:
-            st.error("일치하는 산하 설계사 데이터가 없습니다. 코드를 확인해주세요.")
+            # 원인 파악을 위한 친절한 에러 메시지
+            st.error(f"❌ '{manager_col}' 열에서 매니저 코드 '{manager_code_clean}'에 일치하는 데이터를 찾을 수 없습니다.")
+            st.info("💡 **확인사항:**\n"
+                    "1. 관리자 화면 [2번] 설정에서 매니저 코드가 들어있는 올바른 열을 선택했는지 확인해주세요.\n"
+                    "2. 병합(Merge)시 선택한 파일 기준에 따라 한 쪽에만 매니저 코드가 존재할 수 있습니다.")
         else:
             st.success(f"총 {len(my_df)}명의 설계사 데이터가 조회되었습니다.")
             
             display_cols = []
             
-            # 1. 항목 표시 및 필터 적용
             for item in st.session_state['admin_cols']:
                 col_name = item['col']
                 display_cols.append(col_name)
@@ -265,7 +274,6 @@ elif menu == "매니저 화면 (로그인)":
                     except Exception as e:
                         pass
             
-            # 2. 다중 목표 구간 및 부족분 계산
             for g_col, tiers in st.session_state['admin_goals'].items():
                 if g_col in my_df.columns:
                     my_df[g_col] = pd.to_numeric(my_df[g_col], errors='coerce').fillna(0)
@@ -281,37 +289,36 @@ elif menu == "매니저 화면 (로그인)":
                     if f'{g_col}_다음목표' not in display_cols:
                         display_cols.extend([f'{g_col}_다음목표', f'{g_col}_부족금액'])
 
-            # 3. 맞춤형 분류(태그) 지정 (다중 조건 적용)
             if st.session_state['admin_categories']:
                 if '맞춤분류' not in my_df.columns:
                     my_df['맞춤분류'] = ""
                     
                 for cat in st.session_state['admin_categories']:
-                    c_name = cat['name']
-                    # 초기 마스크는 모두 True 설정 (AND 조건이므로)
+                    c_name = cat.get('name', '')
                     final_mask = pd.Series(True, index=my_df.index)
                     
-                    for cond_info in cat['conditions']:
+                    cond_list = cat.get('conditions', [{'col': cat.get('col'), 'cond': cat.get('condition')}])
+                    
+                    for cond_info in cond_list:
+                        if not cond_info.get('col'): continue
                         c_col = cond_info['col']
                         c_cond = cond_info['cond']
                         try:
-                            # 문자열 평가는 그대로 두고 숫자형 변환만 시도
                             try:
                                 my_df[c_col] = pd.to_numeric(my_df[c_col])
                             except ValueError:
-                                pass # 텍스트 데이터인 경우 유지
+                                pass
                             
                             mask = my_df.eval(f"`{c_col}` {c_cond}")
                             final_mask = final_mask & mask
                         except Exception as e:
-                            final_mask = final_mask & False # 수식 오류시 통과 방지
+                            final_mask = final_mask & False
                             
                     my_df.loc[final_mask, '맞춤분류'] += f"[{c_name}] "
                     
                 if '맞춤분류' not in display_cols:
                     display_cols.insert(0, '맞춤분류')
             
-            # 중복 컬럼 제거 후 최종 출력
             final_cols = list(dict.fromkeys(display_cols))
             
             if not final_cols:
