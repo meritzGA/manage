@@ -153,6 +153,7 @@ def load_data_and_config():
             st.session_state['col_order'] = data.get('col_order', []) if isinstance(data.get('col_order'), list) else []
             st.session_state['merge_key1_col'] = str(data.get('merge_key1_col', ''))
             st.session_state['merge_key2_col'] = str(data.get('merge_key2_col', ''))
+            st.session_state['col_groups'] = data.get('col_groups', []) if isinstance(data.get('col_groups'), list) else []
             
             # 기존 admin_cols에 fallback_col 키가 없으면 추가
             for item in st.session_state['admin_cols']:
@@ -176,6 +177,7 @@ def _reset_session_state():
     st.session_state['col_order'] = []
     st.session_state['merge_key1_col'] = ''
     st.session_state['merge_key2_col'] = ''
+    st.session_state['col_groups'] = []
 
 def has_data():
     """df_merged가 유효한 DataFrame이고 비어있지 않은지 확인"""
@@ -194,6 +196,7 @@ def save_data_and_config():
         'col_order': st.session_state.get('col_order', []),
         'merge_key1_col': st.session_state.get('merge_key1_col', ''),
         'merge_key2_col': st.session_state.get('merge_key2_col', ''),
+        'col_groups': st.session_state.get('col_groups', []),
     }
     with open(CONFIG_FILE, 'wb') as f:
         pickle.dump(data, f)
@@ -256,21 +259,31 @@ def load_file_data(file_bytes, file_name):
 # ==========================================
 # ★ HTML 테이블 렌더링 함수
 # ==========================================
-def render_html_table(df):
-    """DataFrame을 틀 고정(헤더+좌측 열) + 정렬 + 반응형 HTML 테이블로 변환"""
+def render_html_table(df, col_groups=None):
+    """DataFrame을 틀 고정 + 그룹 헤더 + 정렬 + 반응형 HTML 테이블로 변환"""
     table_id = f"perf_{uuid.uuid4().hex[:8]}"
     num_cols = len(df.columns)
     shortfall_cols = set(c for c in df.columns if '부족금액' in c)
+    col_groups = col_groups or []
     
-    # ✅ 좌측 고정할 열 개수 자동 판단: 이름/분류 관련 열까지 고정
+    # 그룹 헤더 존재 여부
+    has_groups = len(col_groups) > 0
+    
+    # 좌측 고정할 열 개수 자동 판단
     freeze_keywords = ['맞춤분류', '설계사', '성명', '이름', '팀장', '대리점']
     freeze_count = 0
     for i, col in enumerate(df.columns):
         if any(kw in col for kw in freeze_keywords):
-            freeze_count = i + 1  # 이 열까지 고정
-    freeze_count = min(freeze_count, 4)  # 최대 4열까지
+            freeze_count = i + 1
+    freeze_count = min(freeze_count, 4)
 
     base_font = max(11, 15 - num_cols // 3)
+    
+    # 그룹 매핑: 각 컬럼이 어떤 그룹에 속하는지
+    col_to_group = {}
+    for grp in col_groups:
+        for c in grp['cols']:
+            col_to_group[c] = grp['name']
     
     html = f"""
     <style>
@@ -295,13 +308,28 @@ def render_html_table(df):
         font-size: {base_font}px;
     }}
     
-    /* 헤더: 상단 고정 */
+    /* 헤더 공통 */
     .perf-table thead th {{
         background-color: #4e5968; color: #ffffff; font-weight: 700;
         text-align: center; padding: 8px 10px; border: 1px solid #3d4654;
-        position: sticky; top: 0; z-index: 2;
-        cursor: pointer; user-select: none;
+        position: sticky; z-index: 2;
         white-space: nowrap;
+    }}
+    /* 그룹 헤더 행 (1행) */
+    .perf-table thead tr.group-row th {{
+        top: 0;
+        cursor: default;
+    }}
+    .perf-table thead tr.group-row th.group-label {{
+        background-color: #364152;
+        font-size: {max(11, base_font)}px;
+        letter-spacing: 0.5px;
+    }}
+    /* 컬럼 헤더 행 (2행 또는 1행) */
+    .perf-table thead tr.col-row th {{
+        top: {"36px" if has_groups else "0"};
+        cursor: pointer;
+        user-select: none;
     }}
     .perf-table thead th:hover {{ background-color: #3d4654; }}
     .perf-table thead th .sort-arrow {{ margin-left: 3px; font-size: 10px; opacity: 0.5; }}
@@ -317,19 +345,10 @@ def render_html_table(df):
     .perf-table tbody tr:hover td {{ background-color: #eef1f6; }}
     .shortfall-cell {{ color: rgb(128, 0, 0); font-weight: 700; }}
     
-    /* 좌측 고정 열 공통 */
-    .col-freeze {{
-        position: sticky;
-        z-index: 1;
-    }}
-    /* 좌측 고정 + 헤더 교차 (좌상단 코너) → 최상위 z-index */
-    thead th.col-freeze {{
-        z-index: 3;
-    }}
-    /* 고정 열 우측에 그림자 구분선 */
-    .col-freeze-last {{
-        box-shadow: 2px 0 5px rgba(0,0,0,0.08);
-    }}
+    /* 좌측 고정 열 */
+    .col-freeze {{ position: sticky; z-index: 1; }}
+    thead th.col-freeze {{ z-index: 3; }}
+    .col-freeze-last {{ box-shadow: 2px 0 5px rgba(0,0,0,0.08); }}
     
     @media (max-width: 1200px) {{
         .perf-table {{ font-size: {max(10, 13 - num_cols // 3)}px; }}
@@ -342,9 +361,48 @@ def render_html_table(df):
     </style>
     """
 
-    # 테이블 HTML 생성
-    html += f'<div class="perf-table-wrap" id="wrap_{table_id}"><table class="perf-table" id="{table_id}"><thead><tr>'
-    for i, col in enumerate(df.columns):
+    columns = list(df.columns)
+    
+    html += f'<div class="perf-table-wrap" id="wrap_{table_id}"><table class="perf-table" id="{table_id}"><thead>'
+    
+    # ── 그룹 헤더 행 (1행) ──
+    if has_groups:
+        html += '<tr class="group-row">'
+        i = 0
+        while i < len(columns):
+            col = columns[i]
+            grp_name = col_to_group.get(col, None)
+            
+            # 고정 열 CSS
+            freeze_cls = ""
+            if i < freeze_count:
+                freeze_cls = "col-freeze"
+                if i == freeze_count - 1:
+                    freeze_cls += " col-freeze-last"
+            
+            if grp_name:
+                # 같은 그룹의 연속 컬럼 수 세기
+                span = 0
+                for j in range(i, len(columns)):
+                    if col_to_group.get(columns[j]) == grp_name:
+                        span += 1
+                    else:
+                        break
+                html += f'<th class="group-label {freeze_cls}" colspan="{span}" data-col="{i}">{grp_name}</th>'
+                i += span
+            else:
+                # 그룹 없는 컬럼은 2행 병합 (rowspan)
+                html += f'<th class="{freeze_cls}" rowspan="2" data-col="{i}" onclick="sortTable(this)">{col} <span class="sort-arrow">▲▼</span></th>'
+                i += 1
+        html += '</tr>'
+    
+    # ── 컬럼 헤더 행 ──
+    html += '<tr class="col-row">'
+    for i, col in enumerate(columns):
+        # 그룹 헤더가 있고, 이 컬럼이 그룹에 속하지 않으면 이미 rowspan으로 처리됨
+        if has_groups and col not in col_to_group:
+            continue
+        
         freeze_cls = ""
         if i < freeze_count:
             freeze_cls = "col-freeze"
@@ -353,9 +411,10 @@ def render_html_table(df):
         html += f'<th class="{freeze_cls}" data-col="{i}" onclick="sortTable(this)">{col} <span class="sort-arrow">▲▼</span></th>'
     html += '</tr></thead><tbody>'
 
+    # ── 본문 행 ──
     for _, row in df.iterrows():
         html += '<tr>'
-        for i, col in enumerate(df.columns):
+        for i, col in enumerate(columns):
             val = row[col]
             cell_val = "" if pd.isna(val) else str(val)
             freeze_cls = ""
@@ -368,36 +427,32 @@ def render_html_table(df):
         html += '</tr>'
     html += '</tbody></table></div>'
 
-    # JavaScript: 틀 고정 left 위치 계산 + 정렬 + 자동 높이
+    # JavaScript
     html += f"""
     <script>
     var FREEZE_COUNT = {freeze_count};
     
-    // ★ 좌측 고정 열의 left 위치를 실제 폭 기준으로 계산
     function applyFreezePositions() {{
         var table = document.getElementById("{table_id}");
         if (!table || FREEZE_COUNT === 0) return;
-        var headerCells = table.querySelectorAll("thead th");
-        
-        // 각 고정 열의 실제 폭 측정
+        // 컬럼 행에서 폭 측정 (col-row의 th 또는 tbody 첫 행)
+        var firstRow = table.querySelector("tbody tr");
+        if (!firstRow) return;
         var leftPos = [];
         var cumLeft = 0;
         for (var i = 0; i < FREEZE_COUNT; i++) {{
             leftPos.push(cumLeft);
-            cumLeft += headerCells[i].offsetWidth;
+            if (firstRow.cells[i]) cumLeft += firstRow.cells[i].offsetWidth;
         }}
-        
-        // 모든 고정 셀에 left 적용
         var allCells = table.querySelectorAll(".col-freeze");
         allCells.forEach(function(cell) {{
             var colIdx = parseInt(cell.getAttribute("data-col"));
-            if (colIdx < leftPos.length) {{
+            if (!isNaN(colIdx) && colIdx < leftPos.length) {{
                 cell.style.left = leftPos[colIdx] + "px";
             }}
         }});
     }}
     
-    // ★ iframe 높이 자동 조절
     function autoResize() {{
         var wrap = document.getElementById("wrap_{table_id}");
         if (window.frameElement) {{
@@ -407,24 +462,16 @@ def render_html_table(df):
         }}
     }}
     
-    window.addEventListener('load', function() {{
-        applyFreezePositions();
-        autoResize();
-    }});
-    window.addEventListener('resize', function() {{
-        applyFreezePositions();
-        autoResize();
-    }});
+    window.addEventListener('load', function() {{ applyFreezePositions(); autoResize(); }});
+    window.addEventListener('resize', function() {{ applyFreezePositions(); autoResize(); }});
 
-    // ★ 정렬 기능
     var sortState = {{}};
     function sortTable(th) {{
         var table = document.getElementById("{table_id}");
         var tbody = table.querySelector("tbody");
         var rows = Array.from(tbody.querySelectorAll("tr"));
-        var headers = Array.from(table.querySelectorAll("thead th"));
-        var colIdx = headers.indexOf(th);
-        if (colIdx < 0) return;
+        var colIdx = parseInt(th.getAttribute("data-col"));
+        if (isNaN(colIdx)) return;
 
         var asc = sortState[colIdx] !== true;
         sortState = {{}};
@@ -438,16 +485,17 @@ def render_html_table(df):
             if (aText === "" && bText === "") return 0;
             if (aText === "") return 1;
             if (bText === "") return -1;
-            if (!isNaN(aNum) && !isNaN(bNum)) {{
-                return asc ? aNum - bNum : bNum - aNum;
-            }}
+            if (!isNaN(aNum) && !isNaN(bNum)) return asc ? aNum - bNum : bNum - aNum;
             return asc ? aText.localeCompare(bText, 'ko') : bText.localeCompare(aText, 'ko');
         }});
-
         rows.forEach(function(r) {{ tbody.appendChild(r); }});
-        headers.forEach(function(h, i) {{
+        
+        // 모든 헤더 행의 정렬 화살표 업데이트
+        table.querySelectorAll("thead th").forEach(function(h) {{
+            var hIdx = parseInt(h.getAttribute("data-col"));
             var arrow = h.querySelector(".sort-arrow");
-            if (i === colIdx) {{
+            if (!arrow) return;
+            if (hIdx === colIdx) {{
                 arrow.textContent = asc ? "▲" : "▼";
                 arrow.className = "sort-arrow active";
             }} else {{
@@ -586,6 +634,9 @@ if menu == "관리자 화면 (설정)":
                             if all(c.get('col', '') in new_cols for c in cond_list):
                                 valid_cats.append(cat)
                         st.session_state['admin_categories'] = valid_cats
+                        
+                        # col_groups는 display name 기반이므로 유효한 항목만 보정
+                        # (section 6에서 col_order 재계산 시 자동 정리됨)
                         
                         save_data_and_config()
                         st.success(f"✅ 데이터 교체 완료! 총 {len(df_merged)}행 | 기존 설정이 유지되었습니다.")
@@ -796,6 +847,39 @@ if menu == "관리자 화면 (설정)":
                         save_data_and_config()
                         st.rerun()
             st.write("---")
+
+        st.divider()
+
+        # ========================================
+        st.header("7. 📊 항목 그룹 헤더 설정")
+        st.caption("여러 항목을 묶어서 상단에 그룹명을 표시합니다. (예: A, B, C 항목 → '2~3월 시책 현황')")
+        
+        # 표시 순서에 등록된 항목 목록을 선택지로 사용
+        col_order = st.session_state.get('col_order', [])
+        if col_order:
+            with st.form("add_group_form"):
+                g_name = st.text_input("그룹 헤더명 (예: 2~3월 시책 현황)")
+                g_cols = st.multiselect("묶을 항목 선택 (표시 순서 기준)", col_order)
+                submit_group = st.form_submit_button("➕ 그룹 추가")
+                if submit_group and g_name.strip() and g_cols:
+                    groups = st.session_state.get('col_groups', [])
+                    groups.append({"name": g_name.strip(), "cols": g_cols})
+                    st.session_state['col_groups'] = groups
+                    save_data_and_config()
+                    st.rerun()
+            
+            if st.session_state.get('col_groups'):
+                for i, grp in enumerate(st.session_state['col_groups']):
+                    row_c1, row_c2 = st.columns([8, 2])
+                    with row_c1:
+                        st.markdown(f"- **[{grp['name']}]** ← {', '.join(grp['cols'])}")
+                    with row_c2:
+                        if st.button("❌ 삭제", key=f"del_grp_{i}"):
+                            st.session_state['col_groups'].pop(i)
+                            save_data_and_config()
+                            st.rerun()
+        else:
+            st.info("먼저 6번에서 표시 순서를 설정해주세요.")
             
     else:
         st.info("👆 먼저 위에서 두 파일을 업로드하고 [데이터 병합 및 교체]를 눌러주세요.")
@@ -995,7 +1079,8 @@ elif menu == "매니저 화면 (로그인)":
                         
                         final_df[c] = final_df[c].apply(format_with_comma_and_hide_zero)
                 
-                # 6. ★ HTML 테이블로 렌더링 (틀 고정 + 정렬 + 반응형)
-                table_html = render_html_table(final_df)
+                # 6. ★ HTML 테이블로 렌더링 (틀 고정 + 그룹 헤더 + 정렬 + 반응형)
+                col_groups = st.session_state.get('col_groups', [])
+                table_html = render_html_table(final_df, col_groups=col_groups)
                 # 테이블 내부 스크롤 사용 — iframe 높이는 뷰포트 85%로 제한
                 components.html(table_html, height=800, scrolling=False)
