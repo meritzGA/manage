@@ -535,11 +535,90 @@ def render_html_table(df, col_groups=None):
         .perf-table .rc th {{ padding: 4px 3px 3px 3px; }}
         .perf-table .rc th .grp-bar {{ height: 3px; margin-bottom: 2px; }}
     }}
+    
+    /* ══════════════════════════════════════
+       데스크톱/모바일 뷰 토글
+       ══════════════════════════════════════ */
+    .desktop-view {{ display: block; }}
+    .mobile-view {{ display: none; }}
+    
+    @media (max-width: 768px) {{
+        .desktop-view {{ display: none !important; }}
+        .mobile-view {{ display: block !important; }}
+    }}
+    
+    /* ══════════════════════════════════════
+       📱 모바일 카드 스타일
+       ══════════════════════════════════════ */
+    .mobile-view {{
+        padding: 0 4px;
+        max-height: 80vh;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+    }}
+    .m-card {{
+        background: #fff; border-radius: 12px;
+        margin-bottom: 10px; overflow: hidden;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+        border: 1px solid #e5e8eb;
+    }}
+    .m-card-head {{
+        display: flex; align-items: center; flex-wrap: wrap;
+        padding: 14px 14px 12px; cursor: pointer;
+        gap: 6px; position: relative;
+    }}
+    .m-num {{
+        background: #4e5968; color: #fff;
+        font-size: 11px; font-weight: 700;
+        width: 24px; height: 24px; border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        flex-shrink: 0;
+    }}
+    .m-name {{
+        font-size: 16px; font-weight: 700; color: #191f28;
+    }}
+    .m-summary {{
+        display: flex; gap: 6px; margin-left: auto; flex-shrink: 0;
+    }}
+    .m-goal {{
+        font-size: 12px; background: #EBF5FB; color: #2B6CB0;
+        padding: 2px 8px; border-radius: 10px; font-weight: 600;
+    }}
+    .m-sc {{
+        font-size: 12px; background: #FFF5F5; color: rgb(128,0,0);
+        padding: 2px 8px; border-radius: 10px; font-weight: 700;
+    }}
+    .m-chevron {{
+        font-size: 10px; color: #8b95a1; margin-left: 6px;
+        transition: transform 0.2s;
+    }}
+    .m-card.open .m-chevron {{ transform: rotate(180deg); }}
+    .m-card-body {{
+        max-height: 0; overflow: hidden;
+        transition: max-height 0.3s ease;
+        border-top: 1px solid #f2f4f6;
+    }}
+    .m-card.open .m-card-body {{
+        max-height: 2000px;
+    }}
+    .m-grp-label {{
+        font-size: 12px; font-weight: 700; color: #4e5968;
+        padding: 8px 14px 4px; margin-top: 4px;
+    }}
+    .m-row {{
+        display: flex; justify-content: space-between;
+        padding: 6px 14px; font-size: 14px;
+    }}
+    .m-row:nth-child(even) {{ background: #f9fafb; }}
+    .m-label {{ color: #6b7684; font-weight: 500; flex-shrink: 0; margin-right: 12px; }}
+    .m-val {{ color: #191f28; font-weight: 600; text-align: right; }}
+    .m-row.m-sc .m-val {{ color: rgb(128,0,0); font-weight: 800; }}
     </style>
     """
 
     # ── 테이블 시작 ──
     html += '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
+    html += '<div class="desktop-view">'
     html += f'<div class="perf-table-wrap" id="wrap_{table_id}"><table class="perf-table" id="{table_id}"><thead>'
     
     # ── 그룹 행: 항상 N개 <th> (colspan 없음) ──
@@ -590,6 +669,83 @@ def render_html_table(df, col_groups=None):
             html += f'<td class="{f_cls}{extra}" data-col="{i}">{cell_val}</td>'
         html += '</tr>'
     html += '</tbody></table></div>'
+    # ── END desktop table ──
+    html += '</div>'  # close .desktop-view
+    
+    # ══════════════════════════════════════════
+    # 📱 모바일 카드 뷰 생성
+    # ══════════════════════════════════════════
+    columns = list(df.columns)
+    
+    # 이름 열 찾기
+    name_col = None
+    name_keywords = ['설계사명', '성명', '이름', '팀장명']
+    for c in columns:
+        if any(kw in c for kw in name_keywords):
+            name_col = c
+            break
+    
+    # 그룹별 열 매핑
+    col_to_grp = {}
+    for grp in col_groups:
+        for c in grp['cols']:
+            col_to_grp[c] = grp['name']
+    
+    html += '<div class="mobile-view">'
+    
+    for row_idx, (_, row) in enumerate(df.iterrows()):
+        # 카드 제목: 순번 + 이름
+        name_val = str(row.get(name_col, '')) if name_col else ''
+        num_val = str(row.get('순번', row_idx + 1)) if '순번' in columns else str(row_idx + 1)
+        
+        html += f'<div class="m-card" onclick="this.classList.toggle(\'open\')">'
+        
+        # 카드 헤더: 이름 + 핵심 요약
+        summary_items = []
+        for c in columns:
+            if '부족금액' in c:
+                v = str(row[c]) if not pd.isna(row[c]) else ''
+                if v and v != '0' and v.strip():
+                    summary_items.append(f'<span class="m-sc">부족 {v}</span>')
+            elif '다음목표' in c:
+                v = str(row[c]) if not pd.isna(row[c]) else ''
+                if v and v.strip():
+                    summary_items.append(f'<span class="m-goal">{v}</span>')
+        summary = ' '.join(summary_items)
+        
+        html += f'<div class="m-card-head"><span class="m-num">{num_val}</span><span class="m-name">{name_val}</span>'
+        if summary:
+            html += f'<span class="m-summary">{summary}</span>'
+        html += '<span class="m-chevron">&#9660;</span></div>'
+        
+        # 카드 본문 (접혀있음, 클릭 시 열림)
+        html += '<div class="m-card-body">'
+        
+        current_group = None
+        skip_cols = {'순번', name_col} if name_col else {'순번'}
+        
+        for c in columns:
+            if c in skip_cols:
+                continue
+            val = str(row[c]) if not pd.isna(row[c]) else ''
+            if not val.strip() or val == '0':
+                continue
+            
+            # 그룹 구분선
+            grp = col_to_grp.get(c)
+            if grp and grp != current_group:
+                gc = group_color_map.get(grp, '#4e5968')
+                html += f'<div class="m-grp-label" style="border-left:3px solid {gc}; padding-left:8px;">{grp}</div>'
+                current_group = grp
+            elif not grp and current_group is not None:
+                current_group = None
+            
+            extra_cls = ' m-sc' if c in shortfall_cols else ''
+            html += f'<div class="m-row{extra_cls}"><span class="m-label">{c}</span><span class="m-val">{val}</span></div>'
+        
+        html += '</div></div>'  # m-card-body, m-card
+    
+    html += '</div>'  # mobile-view
 
     # ── JavaScript ──
     html += f"""
@@ -622,11 +778,14 @@ def render_html_table(df, col_groups=None):
         }});
     }}
     function autoResize() {{
-        var w = document.getElementById("wrap_{table_id}");
-        if (window.frameElement) {{
-            var vh = window.parent.innerHeight || 900;
-            var ratio = isMobile() ? 0.75 : 0.85;
-            window.frameElement.style.height = Math.min(w.scrollHeight + 4, Math.round(vh * ratio)) + "px";
+        if (!window.frameElement) return;
+        var vh = window.parent.innerHeight || 900;
+        if (isMobile()) {{
+            var mv = document.querySelector('.mobile-view');
+            if (mv) window.frameElement.style.height = Math.min(mv.scrollHeight + 20, Math.round(vh * 0.80)) + "px";
+        }} else {{
+            var w = document.getElementById("wrap_{table_id}");
+            if (w) window.frameElement.style.height = Math.min(w.scrollHeight + 4, Math.round(vh * 0.85)) + "px";
         }}
     }}
     window.addEventListener('load', function() {{ applyFreeze(); autoResize(); }});
@@ -928,8 +1087,8 @@ if menu == "관리자 화면 (설정)":
                 row_c1, row_c2 = st.columns([8, 2])
                 with row_c1:
                     disp = item.get('display_name', item['col'])
-                    fb_text = f" ← 대체: `{item['fallback_col']}`" if item.get('fallback_col') else ""
-                    st.markdown(f"- 📄 원본: `{item['col']}`{fb_text} | 화면 표시: [{disp}]** ({item['type']}) | 조건: `{item['condition']}`")
+                    fb_text = f" (대체: `{item['fallback_col']}`)" if item.get('fallback_col') else ""
+                    st.markdown(f"- 📄 원본: `{item['col']}`{fb_text} | **화면 표시: [{disp}]** ({item['type']}) | 조건: `{item['condition']}`")
                 with row_c2:
                     if st.button("❌ 삭제", key=f"del_col_{i}"):
                         st.session_state['admin_cols'].pop(i)
@@ -1086,7 +1245,7 @@ if menu == "관리자 화면 (설정)":
                 for i, grp in enumerate(st.session_state['col_groups']):
                     row_c1, row_c2 = st.columns([8, 2])
                     with row_c1:
-                        st.markdown(f"- **[{grp['name']}]** ← {', '.join(grp['cols'])}")
+                        st.markdown(f"- **[{grp['name']}]** : {', '.join(grp['cols'])}")
                     with row_c2:
                         if st.button("❌ 삭제", key=f"del_grp_{i}"):
                             st.session_state['col_groups'].pop(i)
