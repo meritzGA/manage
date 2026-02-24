@@ -11,7 +11,7 @@ st.set_page_config(page_title="지원매니저별 실적 관리 시스템", layo
 CONFIG_FILE = "app_config.pkl"
 
 # ==========================================
-# 0. 토스(Toss) 스타일 커스텀 CSS
+# 0. 메리츠 스타일 커스텀 CSS
 # ==========================================
 st.markdown("""
 <style>
@@ -19,36 +19,38 @@ st.markdown("""
 html, body, [class*="css"] {
     font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, 'Helvetica Neue', 'Segoe UI', 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif;
 }
+/* 1. 상단 매니저 박스: 메리츠 다크레드 바탕 + 흰 글씨 */
 .toss-header {
-    background-color: #f2f4f6;
+    background-color: rgb(128, 0, 0);
     padding: 32px 40px;
-    border-radius: 24px;
+    border-radius: 20px;
     margin-bottom: 24px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.03);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.1);
 }
 .toss-title {
-    color: #191f28;
+    color: #ffffff;
     font-size: 36px;
     font-weight: 800;
     margin: 0;
     letter-spacing: -0.5px;
 }
 .toss-subtitle {
-    color: #3182f6;
+    color: #ffcccc; /* 서브타이틀은 살짝 연한 레드로 포인트 */
     font-size: 24px;
     font-weight: 700;
     margin-left: 10px;
 }
 .toss-desc {
-    color: #4e5968;
+    color: #f2f4f6;
     font-size: 17px;
     margin: 12px 0 0 0;
     font-weight: 500;
 }
+/* 데이터프레임 모서리 둥글게 */
 [data-testid="stDataFrame"] {
-    border-radius: 16px;
+    border-radius: 12px;
     overflow: hidden;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.04);
+    box-shadow: 0 2px 10px rgba(0,0,0,0.05);
 }
 </style>
 """, unsafe_allow_html=True)
@@ -96,7 +98,7 @@ if 'df_merged' not in st.session_state:
     load_data_and_config()
 
 # ==========================================
-# 2. 데이터 정제 공통 함수
+# 2. 데이터 정제 및 스마트 조건 평가 함수
 # ==========================================
 def decode_excel_text(val):
     if pd.isna(val): return val
@@ -112,6 +114,38 @@ def clean_key(val):
     val_str = str(val).strip().replace(" ", "").upper()
     if val_str.endswith('.0'): val_str = val_str[:-2]
     return val_str
+
+# [핵심] 숫자/텍스트 혼동 및 콤마 완벽 해결 평가 함수
+def evaluate_condition(df, col, cond):
+    # 조건식에 들어간 콤마 제거 (예: >= 500,000 -> >= 500000)
+    cond_clean = re.sub(r'(?<=\d),(?=\d)', '', cond).strip()
+    
+    # 1. 숫자 조건 계산 시도
+    try:
+        temp_s = df[col].astype(str).str.replace(',', '', regex=False)
+        num_s = pd.to_numeric(temp_s, errors='coerce')
+        
+        # 전부 문자열이라 NaN만 나왔다면 숫자계산 건너뜀
+        if num_s.isna().all() and not temp_s.replace('', np.nan).isna().all():
+            raise ValueError("문자형 데이터입니다.")
+            
+        temp_df = pd.DataFrame({col: num_s.fillna(0)})
+        mask = temp_df.eval(f"`{col}` {cond_clean}", engine='python')
+        if isinstance(mask, pd.Series):
+            return mask.fillna(False).astype(bool)
+        else:
+            return pd.Series(bool(mask), index=df.index)
+            
+    # 2. 숫자 계산 실패 시 텍스트 조건 계산 (예: == '정상') 시도
+    except Exception:
+        try:
+            mask = df.eval(f"`{col}` {cond}", engine='python')
+            if isinstance(mask, pd.Series):
+                return mask.fillna(False).astype(bool)
+            else:
+                return pd.Series(bool(mask), index=df.index)
+        except Exception:
+            return pd.Series(False, index=df.index)
 
 @st.cache_data(show_spinner=False)
 def load_file_data(file_bytes, file_name):
@@ -202,13 +236,11 @@ if menu == "관리자 화면 (설정)":
 
         # ========================================
         st.header("3. 표시할 데이터 항목 및 필터 추가")
-        st.markdown("항목을 선택하고 **[표시할 명칭]**을 입력하면 화면에 입력한 이름으로 예쁘게 나옵니다.")
-        
         c1, c2, c3, c4, c5 = st.columns([3, 2, 2, 2, 1])
         with c1: sel_col = st.selectbox("항목 선택", available_columns, key="sec3_col")
         with c2: display_name = st.text_input("표시 명칭 (선택)", placeholder="미입력시 원본유지", key="sec3_disp")
         with c3: col_type = st.radio("데이터 타입", ["텍스트", "숫자"], horizontal=True, key="sec3_type")
-        with c4: condition = st.text_input("산식 (예: > 0)", key="sec3_cond")
+        with c4: condition = st.text_input("산식 (예: >= 500,000)", key="sec3_cond")
         with c5:
             st.write(""); st.write("")
             if st.button("➕ 추가", key="btn_add_col"):
@@ -271,7 +303,7 @@ if menu == "관리자 화면 (설정)":
                 cat_col2 = st.selectbox("2. 기준 열 선택", ["(선택안함)"] + available_columns)
                 cat_col3 = st.selectbox("3. 기준 열 선택", ["(선택안함)"] + available_columns)
             with col2:
-                cat_cond1 = st.text_input("1. 산식 (예: >= 500000, 텍스트일경우 == '정상')")
+                cat_cond1 = st.text_input("1. 산식 (예: >= 500000, 텍스트는 == '정상')")
                 cat_cond2 = st.text_input("2. 산식 (예: > 0, 없으면 비워둠)")
                 cat_cond3 = st.text_input("3. 산식 (예: <= 100, 없으면 비워둠)")
             
@@ -305,7 +337,6 @@ if menu == "관리자 화면 (설정)":
 
         # ========================================
         st.header("6. 📋 화면 표시 순서 커스텀 설정")
-        st.markdown("항목 우측의 **위(🔼) / 아래(🔽)** 버튼을 눌러 매니저 화면에 표시될 순서를 직관적으로 변경할 수 있습니다.")
         
         expected_cols = []
         if st.session_state['admin_categories']: expected_cols.append("맞춤분류")
@@ -328,8 +359,7 @@ if menu == "관리자 화면 (설정)":
             st.write("---")
             for i, col_name in enumerate(st.session_state['col_order']):
                 c1, c2, c3 = st.columns([8, 1, 1])
-                with c1:
-                    st.markdown(f"**{i+1}.** {col_name}")
+                with c1: st.markdown(f"**{i+1}.** {col_name}")
                 with c2:
                     if st.button("🔼", key=f"up_{i}", disabled=(i == 0)):
                         st.session_state['col_order'][i], st.session_state['col_order'][i-1] = st.session_state['col_order'][i-1], st.session_state['col_order'][i]
@@ -341,8 +371,6 @@ if menu == "관리자 화면 (설정)":
                         save_data_and_config()
                         st.rerun()
             st.write("---")
-        else:
-            st.info("먼저 위에서 표시할 항목을 추가해주세요.")
             
     else:
         st.info("👆 먼저 위에서 두 파일을 업로드하고 [데이터 병합 및 시스템에 저장]을 눌러주세요.")
@@ -375,6 +403,7 @@ elif menu == "매니저 화면 (로그인)":
         if my_df.empty:
             st.error(f"❌ 매니저 코드 '{manager_code}'에 일치하는 데이터를 찾을 수 없습니다.")
         else:
+            # 1. 상단 디자인 헤더 표시 (메리츠 다크레드)
             manager_name = str(my_df[manager_name_col].iloc[0]) if manager_name_col in my_df.columns else "매니저"
             
             st.markdown(f"""
@@ -386,42 +415,33 @@ elif menu == "매니저 화면 (로그인)":
             
             display_cols = []
             
-            # (1) 일반 항목 표시 (숫자 콤마 제거 및 완벽 변환 후 필터)
+            # (1) 일반 항목 필터 (스마트 평가함수 적용)
             for item in st.session_state['admin_cols']:
                 orig_col = item['col']
                 disp_col = item.get('display_name', orig_col)
                 
                 if item['type'] == '숫자' and item['condition']:
-                    try:
-                        temp_df = my_df.copy()
-                        # 콤마 제거 후 숫자 변환 (10,000 -> 10000)
-                        cleaned_str = temp_df[orig_col].astype(str).str.replace(',', '', regex=False)
-                        temp_df[orig_col] = pd.to_numeric(cleaned_str, errors='coerce').fillna(0)
-                        mask = temp_df.eval(f"`{orig_col}` {item['condition']}")
-                        
-                        if isinstance(mask, pd.Series):
-                            mask = mask.fillna(False).astype(bool)
-                        else:
-                            mask = pd.Series(bool(mask), index=temp_df.index)
-                            
-                        my_df = my_df[mask]
-                    except Exception as e:
-                        pass
+                    mask = evaluate_condition(my_df, orig_col, item['condition'])
+                    my_df = my_df[mask]
                 
                 my_df[disp_col] = my_df[orig_col]
                 display_cols.append(disp_col)
             
-            # (2) 목표 구간 처리
+            # (2) 목표 구간 처리 (20만 등 깔끔한 텍스트 변환)
             for g_col, tiers in st.session_state['admin_goals'].items():
                 if g_col in my_df.columns:
-                    # 콤마 제거 후 숫자 변환
                     cleaned_str = my_df[g_col].astype(str).str.replace(',', '', regex=False)
                     my_df[g_col] = pd.to_numeric(cleaned_str, errors='coerce').fillna(0)
                     
                     def calc_shortfall(val):
                         for t in tiers:
                             if val < t:
-                                return pd.Series([f"{t:,.0f} 목표", t - val])
+                                # 200000 -> 20만 포맷 변환
+                                if t % 10000 == 0:
+                                    tier_str = f"{int(t)//10000}만"
+                                else:
+                                    tier_str = f"{t/10000:g}만"
+                                return pd.Series([tier_str, t - val])
                         return pd.Series(["최고 구간 달성", 0])
                     
                     next_target_col = f"{g_col} 다음목표"
@@ -431,7 +451,7 @@ elif menu == "매니저 화면 (로그인)":
                     if next_target_col not in display_cols:
                         display_cols.extend([next_target_col, shortfall_col])
 
-            # (3) 맞춤분류(태그) 설정 (텍스트/숫자 콤마 혼동 완벽 방지)
+            # (3) 맞춤분류(태그) 설정 (스마트 평가함수 적용)
             if st.session_state['admin_categories']:
                 if '맞춤분류' not in my_df.columns:
                     my_df['맞춤분류'] = ""
@@ -446,28 +466,7 @@ elif menu == "매니저 화면 (로그인)":
                         c_col = cond_info['col']
                         c_cond = cond_info['cond']
                         
-                        try:
-                            # 1단계: 문자 그대로 (텍스트 평가용)
-                            mask = my_df.eval(f"`{c_col}` {c_cond}")
-                            if isinstance(mask, pd.Series):
-                                mask = mask.fillna(False).astype(bool)
-                            else:
-                                mask = pd.Series(bool(mask), index=my_df.index)
-                        except Exception:
-                            try:
-                                # 2단계: 콤마(,) 제거 후 숫자로 완벽 변환 (숫자 평가용)
-                                temp_df = my_df.copy()
-                                cleaned_str = temp_df[c_col].astype(str).str.replace(',', '', regex=False)
-                                temp_df[c_col] = pd.to_numeric(cleaned_str, errors='coerce').fillna(0)
-                                
-                                mask = temp_df.eval(f"`{c_col}` {c_cond}")
-                                if isinstance(mask, pd.Series):
-                                    mask = mask.fillna(False).astype(bool)
-                                else:
-                                    mask = pd.Series(bool(mask), index=temp_df.index)
-                            except Exception:
-                                mask = pd.Series(False, index=my_df.index)
-                                
+                        mask = evaluate_condition(my_df, c_col, c_cond)
                         final_mask = final_mask & mask
                         
                     my_df.loc[final_mask, '맞춤분류'] += f"[{c_name}] "
@@ -487,40 +486,60 @@ elif menu == "매니저 화면 (로그인)":
             if sort_keys:
                 my_df = my_df.sort_values(by=sort_keys, ascending=[True] * len(sort_keys))
             
-            # 4. 사용자 지정 순서 정렬
+            # 4. 사용자 지정 순서 정렬 및 숫자 타입 확보
             final_cols = list(dict.fromkeys(display_cols))
             ordered_final_cols = []
             for c in st.session_state.get('col_order', []):
-                if c in final_cols:
-                    ordered_final_cols.append(c)
+                if c in final_cols: ordered_final_cols.append(c)
             for c in final_cols:
-                if c not in ordered_final_cols:
-                    ordered_final_cols.append(c)
+                if c not in ordered_final_cols: ordered_final_cols.append(c)
                     
             if not ordered_final_cols:
                 st.warning("관리자 화면에서 표시할 항목을 추가해주세요.")
             else:
                 final_df = my_df[ordered_final_cols].copy()
                 
-                # 5. 세 자리 콤마(,) 포맷팅 안전 처리
+                # 오른쪽 정렬 및 스타일링을 위해 숫자 데이터는 실제 numeric으로 변환
                 for c in final_df.columns:
-                    if '코드' not in c and '연도' not in c:
-                        def format_with_comma(val):
-                            try:
-                                if pd.isna(val) or str(val).strip() == "": return ""
-                                # 텍스트 안의 콤마를 지우고 숫자 파싱
-                                clean_val = str(val).replace(',', '')
-                                num = float(clean_val)
-                                if num == 0: return "0"
-                                if num.is_integer(): return f"{int(num):,}"
-                                return f"{num:,.1f}"
-                            except:
-                                return val
-                        
-                        final_df[c] = final_df[c].apply(format_with_comma)
+                    if '코드' not in c and '연도' not in c and '연락처' not in c and '목표' not in c and '분류' not in c:
+                        try:
+                            clean_s = final_df[c].astype(str).str.replace(',', '', regex=False)
+                            # 숫자로만 변환 (문자가 있으면 에러내어 패스하도록 처리)
+                            num_s = pd.to_numeric(clean_s)
+                            final_df[c] = num_s
+                        except:
+                            pass
                 
+                # 5. Pandas Styler를 이용한 완벽한 디자인 적용 (색상, 우측정렬, 포맷)
+                def style_dataframe(df):
+                    styler = df.style
+                    
+                    # (1) 숫자 컬럼 우측 정렬 및 세자리 콤마 포맷 적용
+                    format_dict = {}
+                    for c in df.columns:
+                        if pd.api.types.is_numeric_dtype(df[c]) and '코드' not in c and '연도' not in c:
+                            format_dict[c] = "{:,.0f}"
+                    
+                    styler = styler.format(format_dict, na_rep="")
+                    styler = styler.set_properties(**{'text-align': 'right'}, subset=list(format_dict.keys()))
+                    
+                    # (2) 부족금액 폰트색상 '다크레드' 적용
+                    shortfall_cols = [c for c in df.columns if '부족금액' in c]
+                    if shortfall_cols:
+                        for sc in shortfall_cols:
+                            styler = styler.map(lambda x: 'color: rgb(128, 0, 0); font-weight: bold;' if pd.notna(x) and x != "" else '', subset=[sc])
+                    
+                    # (3) 표 헤더 짙은 회색 배경 + 흰색 글씨 적용 
+                    # (Streamlit 최신버전 호환성을 위해 최대한 반영)
+                    styler = styler.set_table_styles([
+                        {'selector': 'th', 'props': [('background-color', '#4e5968'), ('color', 'white'), ('font-weight', 'bold')]},
+                        {'selector': 'thead th', 'props': [('background-color', '#4e5968'), ('color', 'white')]}
+                    ])
+                    
+                    return styler
+
                 st.dataframe(
-                    final_df, 
+                    style_dataframe(final_df), 
                     use_container_width=True, 
                     hide_index=True
                 )
