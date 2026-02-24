@@ -7,9 +7,12 @@ import io
 import os
 import pickle
 import uuid
+import shutil
+from datetime import datetime
 
 st.set_page_config(page_title="지원매니저별 실적 관리 시스템", layout="wide")
 
+DATA_FILE = "app_data.pkl"
 CONFIG_FILE = "app_config.pkl"
 
 # ==========================================
@@ -129,43 +132,63 @@ iframe {
 # 1. 설정 및 데이터 영구 저장/불러오기 함수
 # ==========================================
 def load_data_and_config():
-    # 메인 파일 시도 → 실패하면 백업 파일 시도
-    for filepath in [CONFIG_FILE, CONFIG_FILE + ".bak"]:
-        if not os.path.exists(filepath):
-            continue
+    # 구 형식(통합 pkl) 자동 마이그레이션
+    if not os.path.exists(DATA_FILE) and os.path.exists(CONFIG_FILE):
         try:
-            with open(filepath, 'rb') as f:
-                data = pickle.load(f)
-            if not isinstance(data, dict):
-                continue
-            
-            df = data.get('df_merged', pd.DataFrame())
-            st.session_state['df_merged'] = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
-            st.session_state['manager_col'] = str(data.get('manager_col', ""))
-            st.session_state['manager_name_col'] = str(data.get('manager_name_col', ""))
-            st.session_state['manager_col2'] = str(data.get('manager_col2', ""))
-            st.session_state['admin_cols'] = data.get('admin_cols', []) if isinstance(data.get('admin_cols'), list) else []
-            st.session_state['admin_goals'] = data.get('admin_goals', [])
-            if isinstance(st.session_state['admin_goals'], dict):
-                st.session_state['admin_goals'] = [
-                    {"target_col": k, "ref_col": "", "tiers": v} 
-                    for k, v in st.session_state['admin_goals'].items()
-                ]
-            st.session_state['admin_categories'] = data.get('admin_categories', []) if isinstance(data.get('admin_categories'), list) else []
-            st.session_state['col_order'] = data.get('col_order', []) if isinstance(data.get('col_order'), list) else []
-            st.session_state['merge_key1_col'] = str(data.get('merge_key1_col', ''))
-            st.session_state['merge_key2_col'] = str(data.get('merge_key2_col', ''))
-            st.session_state['col_groups'] = data.get('col_groups', []) if isinstance(data.get('col_groups'), list) else []
-            st.session_state['data_date'] = str(data.get('data_date', ''))
-            
-            for item in st.session_state['admin_cols']:
-                if 'fallback_col' not in item:
-                    item['fallback_col'] = ''
-            return  # 성공하면 바로 종료
+            with open(CONFIG_FILE, 'rb') as f:
+                old = pickle.load(f)
+            if isinstance(old, dict) and 'df_merged' in old:
+                df = old['df_merged']
+                if isinstance(df, pd.DataFrame) and not df.empty:
+                    # DataFrame을 DATA_FILE로 분리
+                    with open(DATA_FILE, 'wb') as f:
+                        pickle.dump({'df_merged': df}, f)
+        except Exception:
+            pass
+    
+    # 1) 설정 로드
+    cfg = None
+    for fp in [CONFIG_FILE, CONFIG_FILE + ".bak"]:
+        if not os.path.exists(fp): continue
+        try:
+            with open(fp, 'rb') as f:
+                d = pickle.load(f)
+            if isinstance(d, dict):
+                cfg = d
+                break
         except Exception:
             continue
-    # 모든 시도 실패 시에만 초기화
-    _reset_session_state()
+    if cfg is None:
+        cfg = {}
+    
+    st.session_state['manager_col'] = str(cfg.get('manager_col', ""))
+    st.session_state['manager_name_col'] = str(cfg.get('manager_name_col', ""))
+    st.session_state['manager_col2'] = str(cfg.get('manager_col2', ""))
+    st.session_state['admin_cols'] = cfg.get('admin_cols', []) if isinstance(cfg.get('admin_cols'), list) else []
+    st.session_state['admin_goals'] = cfg.get('admin_goals', [])
+    if isinstance(st.session_state['admin_goals'], dict):
+        st.session_state['admin_goals'] = [
+            {"target_col": k, "ref_col": "", "tiers": v} 
+            for k, v in st.session_state['admin_goals'].items()
+        ]
+    st.session_state['admin_categories'] = cfg.get('admin_categories', []) if isinstance(cfg.get('admin_categories'), list) else []
+    st.session_state['col_order'] = cfg.get('col_order', []) if isinstance(cfg.get('col_order'), list) else []
+    st.session_state['merge_key1_col'] = str(cfg.get('merge_key1_col', ''))
+    st.session_state['merge_key2_col'] = str(cfg.get('merge_key2_col', ''))
+    st.session_state['col_groups'] = cfg.get('col_groups', []) if isinstance(cfg.get('col_groups'), list) else []
+    st.session_state['data_date'] = str(cfg.get('data_date', ''))
+    for item in st.session_state['admin_cols']:
+        if 'fallback_col' not in item: item['fallback_col'] = ''
+    
+    # 2) DataFrame 로드 (DATA_FILE에서만)
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, 'rb') as f:
+                data = pickle.load(f)
+            df = data.get('df_merged', pd.DataFrame()) if isinstance(data, dict) else pd.DataFrame()
+            st.session_state['df_merged'] = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+        except Exception:
+            st.session_state['df_merged'] = pd.DataFrame()
 
 def _reset_session_state():
     st.session_state['df_merged'] = pd.DataFrame()
@@ -182,13 +205,12 @@ def _reset_session_state():
     st.session_state['data_date'] = ''
 
 def has_data():
-    """df_merged가 유효한 DataFrame이고 비어있지 않은지 확인"""
     df = st.session_state.get('df_merged', None)
     return isinstance(df, pd.DataFrame) and not df.empty
 
-def save_data_and_config():
-    data = {
-        'df_merged': st.session_state.get('df_merged', pd.DataFrame()),
+def save_config():
+    """설정만 저장 (가벼움 — 버튼 클릭 시마다 호출해도 부담 없음)"""
+    cfg = {
         'manager_col': st.session_state.get('manager_col', ""),
         'manager_name_col': st.session_state.get('manager_name_col', ""),
         'manager_col2': st.session_state.get('manager_col2', ""),
@@ -202,18 +224,29 @@ def save_data_and_config():
         'data_date': st.session_state.get('data_date', ''),
     }
     try:
-        # 기존 파일 백업
-        import shutil
         if os.path.exists(CONFIG_FILE):
             shutil.copy2(CONFIG_FILE, CONFIG_FILE + ".bak")
-        # 임시 파일에 먼저 쓰고 → 이름 변경 (안전한 저장)
-        tmp_file = CONFIG_FILE + ".tmp"
-        with open(tmp_file, 'wb') as f:
-            pickle.dump(data, f)
-        shutil.move(tmp_file, CONFIG_FILE)
+        tmp = CONFIG_FILE + ".tmp"
+        with open(tmp, 'wb') as f:
+            pickle.dump(cfg, f)
+        shutil.move(tmp, CONFIG_FILE)
     except Exception:
-        # 실패해도 세션 상태는 유지됨
         pass
+
+def save_data():
+    """DataFrame만 저장 (무거움 — 파일 병합 시에만 호출)"""
+    try:
+        data = {'df_merged': st.session_state.get('df_merged', pd.DataFrame())}
+        tmp = DATA_FILE + ".tmp"
+        with open(tmp, 'wb') as f:
+            pickle.dump(data, f)
+        shutil.move(tmp, DATA_FILE)
+    except Exception:
+        pass
+
+def save_data_and_config():
+    """하위 호환용 — 기존 코드에서 호출하는 곳은 config만 저장"""
+    save_config()
 
 if 'df_merged' not in st.session_state:
     _reset_session_state()
@@ -512,42 +545,17 @@ def render_html_table(df, col_groups=None):
 st.sidebar.title("메뉴")
 menu = st.sidebar.radio("이동할 화면을 선택하세요", ["매니저 화면 (로그인)", "관리자 화면 (설정)"])
 st.sidebar.divider()
-with st.sidebar.expander("💾 설정 백업 / 복원"):
-    # 설정 다운로드
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, 'rb') as f:
-            st.download_button("⬇️ 현재 설정 백업 파일 다운로드", f.read(), 
-                             file_name="app_config_backup.pkl", mime="application/octet-stream")
-    # 설정 업로드 복원
-    restore_file = st.file_uploader("⬆️ 백업 파일로 복원", type=['pkl'], key="restore_pkl")
-    if restore_file is not None:
-        if st.button("복원 실행"):
-            try:
-                data = pickle.loads(restore_file.getvalue())
-                if isinstance(data, dict):
-                    with open(CONFIG_FILE, 'wb') as f:
-                        f.write(restore_file.getvalue())
-                    st.success("✅ 복원 완료! 새로고침됩니다.")
-                    import time; time.sleep(1)
-                    _reset_session_state()
-                    load_data_and_config()
-                    st.rerun()
-                else:
-                    st.error("유효하지 않은 백업 파일입니다.")
-            except Exception as e:
-                st.error(f"복원 실패: {e}")
-
 with st.sidebar.expander("⚠️ 시스템 초기화 (주의)"):
     st.caption("모든 설정과 데이터가 삭제됩니다.")
-    confirm = st.text_input("초기화하려면 'reset'을 입력하세요", key="reset_confirm")
+    confirm = st.text_input("'reset' 입력 후 실행", key="reset_confirm")
     if st.button("🔄 초기화 실행", disabled=(confirm != "reset")):
-        try:
-            if os.path.exists(CONFIG_FILE):
-                import shutil
-                shutil.copy2(CONFIG_FILE, CONFIG_FILE + ".before_reset")
-                os.remove(CONFIG_FILE)
-        except Exception:
-            pass
+        for fp in [CONFIG_FILE, DATA_FILE]:
+            try:
+                if os.path.exists(fp):
+                    shutil.copy2(fp, fp + ".before_reset")
+                    os.remove(fp)
+            except Exception:
+                pass
         _reset_session_state()
         st.rerun()
 
@@ -602,23 +610,19 @@ if menu == "관리자 화면 (설정)":
                 if submit_merge:
                     with st.spinner("데이터를 병합하고 저장 중입니다..."):
                         # ✅ 파일 생성일자 추출 (최신 날짜 저장)
-                        from datetime import datetime
                         file_dates = []
                         for f_obj in [file1, file2]:
                             if f_obj.name.endswith('.xlsx'):
                                 try:
-                                    from openpyxl import load_workbook
-                                    wb = load_workbook(io.BytesIO(f_obj.getvalue()), read_only=True)
-                                    props = wb.properties
-                                    d = props.modified or props.created
-                                    if d:
-                                        file_dates.append(d)
+                                    import openpyxl
+                                    wb = openpyxl.load_workbook(io.BytesIO(f_obj.getvalue()), read_only=True)
+                                    d = wb.properties.modified or wb.properties.created
+                                    if d: file_dates.append(d)
                                     wb.close()
                                 except Exception:
                                     pass
                         if file_dates:
-                            latest = max(file_dates)
-                            st.session_state['data_date'] = latest.strftime("%Y.%m.%d")
+                            st.session_state['data_date'] = max(file_dates).strftime("%Y.%m.%d")
                         else:
                             st.session_state['data_date'] = datetime.now().strftime("%Y.%m.%d")
                         
@@ -684,9 +688,10 @@ if menu == "관리자 화면 (설정)":
                         st.session_state['admin_categories'] = valid_cats
                         
                         # col_groups는 display name 기반이므로 유효한 항목만 보정
-                        # (section 6에서 col_order 재계산 시 자동 정리됨)
+                        # (section 7에서 col_order 재계산 시 자동 정리됨)
                         
-                        save_data_and_config()
+                        save_data()    # DataFrame 저장 (무거움 — 여기서만 호출)
+                        save_config()  # 설정 저장 (가벼움)
                         st.success(f"✅ 데이터 교체 완료! 총 {len(df_merged)}행 | 기존 설정이 유지되었습니다.")
                         st.rerun()
         except Exception as e:
@@ -887,7 +892,7 @@ if menu == "관리자 화면 (설정)":
                 
         if st.session_state.get('col_order', []) != valid_order:
             st.session_state['col_order'] = valid_order
-            save_data_and_config()
+            # 자동 저장하지 않음 — 다른 설정 변경 시 함께 저장됨
 
         if st.session_state['col_order']:
             st.write("---")
@@ -987,6 +992,7 @@ elif menu == "매니저 화면 (로그인)":
         if my_df.empty:
             st.error(f"❌ 매니저 코드 '{manager_code}'에 일치하는 데이터를 찾을 수 없습니다.")
         else:
+          try:
             manager_name = "매니저"
             if manager_name_col in my_df.columns:
                 name_vals = my_df[manager_name_col].dropna()
@@ -1146,3 +1152,6 @@ elif menu == "매니저 화면 (로그인)":
                 table_html = render_html_table(final_df, col_groups=col_groups)
                 # 테이블 내부 스크롤 사용 — iframe 높이는 뷰포트 85%로 제한
                 components.html(table_html, height=800, scrolling=False)
+          except Exception as e:
+            st.error(f"데이터 처리 중 오류가 발생했습니다: {e}")
+            st.info("관리자 화면에서 설정을 확인해주세요.")
