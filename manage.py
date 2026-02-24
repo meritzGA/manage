@@ -34,7 +34,7 @@ html, body, [class*="css"] {
     letter-spacing: -0.5px;
 }
 .toss-subtitle {
-    color: #3182f6; /* 토스 블루 컬러로 코드 강조 */
+    color: #3182f6;
     font-size: 24px;
     font-weight: 700;
     margin-left: 10px;
@@ -263,7 +263,7 @@ if menu == "관리자 화면 (설정)":
         st.divider()
 
         # ========================================
-        st.header("5. 맞춤형 분류(태그) 설정")
+        st.header("5. 맞춤형 분류(태그) 설정 (3개 조건 조합)")
         with st.form("add_cat_form"):
             col1, col2 = st.columns(2)
             with col1:
@@ -271,7 +271,7 @@ if menu == "관리자 화면 (설정)":
                 cat_col2 = st.selectbox("2. 기준 열 선택", ["(선택안함)"] + available_columns)
                 cat_col3 = st.selectbox("3. 기준 열 선택", ["(선택안함)"] + available_columns)
             with col2:
-                cat_cond1 = st.text_input("1. 산식 (예: >= 500000)")
+                cat_cond1 = st.text_input("1. 산식 (예: >= 500000, 텍스트일경우 == '정상')")
                 cat_cond2 = st.text_input("2. 산식 (예: > 0, 없으면 비워둠)")
                 cat_cond3 = st.text_input("3. 산식 (예: <= 100, 없으면 비워둠)")
             
@@ -305,9 +305,8 @@ if menu == "관리자 화면 (설정)":
 
         # ========================================
         st.header("6. 📋 화면 표시 순서 커스텀 설정")
-        st.markdown("매니저 화면에 출력될 열의 순서를 자유롭게 배치하세요. **(박스 안의 항목들을 마우스로 드래그해서 순서를 바꾸거나, `X`를 눌러 지우고 다시 순서대로 클릭하시면 됩니다.)**")
+        st.markdown("항목 우측의 **위(🔼) / 아래(🔽)** 버튼을 눌러 매니저 화면에 표시될 순서를 직관적으로 변경할 수 있습니다.")
         
-        # 현재 설정된 표시명 기준 컬럼 수집
         expected_cols = []
         if st.session_state['admin_categories']: expected_cols.append("맞춤분류")
         for item in st.session_state['admin_cols']: 
@@ -315,17 +314,38 @@ if menu == "관리자 화면 (설정)":
         for g_col in st.session_state['admin_goals'].keys(): 
             expected_cols.extend([f"{g_col} 다음목표", f"{g_col} 부족금액"])
             
+        # 새로운 항목이 추가되거나 삭제되었을 때 동기화
         current_order = st.session_state.get('col_order', [])
         valid_order = [c for c in current_order if c in expected_cols]
         for c in expected_cols:
             if c not in valid_order:
                 valid_order.append(c)
                 
-        new_order = st.multiselect("왼쪽부터 차례대로 화면에 표시됩니다.", expected_cols, default=valid_order)
-        if st.button("순서 저장", key="btn_save_order"):
-            st.session_state['col_order'] = new_order
+        # 변경사항 세션에 즉시 반영
+        if st.session_state.get('col_order', []) != valid_order:
+            st.session_state['col_order'] = valid_order
             save_data_and_config()
-            st.success("✅ 화면 표시 순서가 저장되었습니다.")
+
+        # [새롭게 추가된 직관적인 버튼식 순서 변경 UI]
+        if st.session_state['col_order']:
+            st.write("---")
+            for i, col_name in enumerate(st.session_state['col_order']):
+                c1, c2, c3 = st.columns([8, 1, 1])
+                with c1:
+                    st.markdown(f"**{i+1}.** {col_name}")
+                with c2:
+                    if st.button("🔼", key=f"up_{i}", disabled=(i == 0)):
+                        st.session_state['col_order'][i], st.session_state['col_order'][i-1] = st.session_state['col_order'][i-1], st.session_state['col_order'][i]
+                        save_data_and_config()
+                        st.rerun()
+                with c3:
+                    if st.button("🔽", key=f"down_{i}", disabled=(i == len(st.session_state['col_order']) - 1)):
+                        st.session_state['col_order'][i], st.session_state['col_order'][i+1] = st.session_state['col_order'][i+1], st.session_state['col_order'][i]
+                        save_data_and_config()
+                        st.rerun()
+            st.write("---")
+        else:
+            st.info("먼저 위에서 표시할 항목을 추가해주세요.")
             
     else:
         st.info("👆 먼저 위에서 두 파일을 업로드하고 [데이터 병합 및 시스템에 저장]을 눌러주세요.")
@@ -358,7 +378,6 @@ elif menu == "매니저 화면 (로그인)":
         if my_df.empty:
             st.error(f"❌ 매니저 코드 '{manager_code}'에 일치하는 데이터를 찾을 수 없습니다.")
         else:
-            # 1. 상단 디자인 헤더 표시 (Toss Style)
             manager_name = str(my_df[manager_name_col].iloc[0]) if manager_name_col in my_df.columns else "매니저"
             
             st.markdown(f"""
@@ -368,24 +387,22 @@ elif menu == "매니저 화면 (로그인)":
             </div>
             """, unsafe_allow_html=True)
             
-            # 2. 데이터 처리
             display_cols = []
             
-            # (1) 일반 항목 (사용자 지정 명칭 적용)
+            # (1) 일반 항목 표시
             for item in st.session_state['admin_cols']:
                 orig_col = item['col']
                 disp_col = item.get('display_name', orig_col)
                 
-                # 숫자 필터 먼저 적용
                 if item['type'] == '숫자' and item['condition']:
                     try:
-                        my_df[orig_col] = pd.to_numeric(my_df[orig_col], errors='coerce').fillna(0)
-                        mask = my_df.eval(f"`{orig_col}` {item['condition']}")
+                        temp_df = my_df.copy()
+                        temp_df[orig_col] = pd.to_numeric(temp_df[orig_col], errors='coerce').fillna(0)
+                        mask = temp_df.eval(f"`{orig_col}` {item['condition']}")
                         my_df = my_df[mask]
                     except Exception as e:
                         pass
                 
-                # 원본 열 데이터를 지정된 표시 명칭 열로 복사
                 my_df[disp_col] = my_df[orig_col]
                 display_cols.append(disp_col)
             
@@ -410,47 +427,52 @@ elif menu == "매니저 화면 (로그인)":
             if st.session_state['admin_categories']:
                 if '맞춤분류' not in my_df.columns:
                     my_df['맞춤분류'] = ""
+                    
                 for cat in st.session_state['admin_categories']:
                     c_name = cat.get('name', '')
                     final_mask = pd.Series(True, index=my_df.index)
                     cond_list = cat.get('conditions', [{'col': cat.get('col'), 'cond': cat.get('condition')}])
+                    
                     for cond_info in cond_list:
                         if not cond_info.get('col'): continue
                         c_col = cond_info['col']
                         c_cond = cond_info['cond']
+                        
                         try:
-                            try: my_df[c_col] = pd.to_numeric(my_df[c_col])
-                            except ValueError: pass
                             mask = my_df.eval(f"`{c_col}` {c_cond}")
-                            final_mask = final_mask & mask
-                        except Exception as e:
-                            final_mask = final_mask & False
+                        except Exception:
+                            try:
+                                temp_df = my_df.copy()
+                                temp_df[c_col] = pd.to_numeric(temp_df[c_col], errors='coerce').fillna(0)
+                                mask = temp_df.eval(f"`{c_col}` {c_cond}")
+                            except Exception:
+                                mask = False
+                                
+                        final_mask = final_mask & mask
+                        
                     my_df.loc[final_mask, '맞춤분류'] += f"[{c_name}] "
+                    
                 if '맞춤분류' not in display_cols:
                     display_cols.insert(0, '맞춤분류')
             
-            # 3. 데이터 정렬 (맞춤분류 -> 지사명 -> 성명) - 생성된 화면 표시 이름으로도 검색
+            # 3. 데이터 정렬
             sort_keys = []
             if '맞춤분류' in my_df.columns: sort_keys.append('맞춤분류')
-            
             ji_cols = [c for c in display_cols if '지사명' in c]
             if not ji_cols: ji_cols = [c for c in my_df.columns if '지사명' in c]
             if ji_cols: sort_keys.append(ji_cols[0])
-                
             gender_name_cols = [c for c in display_cols if '성별' in c or '설계사명' in c or '성명' in c or '이름' in c]
             if not gender_name_cols: gender_name_cols = [c for c in my_df.columns if '성별' in c or '설계사명' in c or '성명' in c]
             if gender_name_cols: sort_keys.append(gender_name_cols[0])
-                
             if sort_keys:
                 my_df = my_df.sort_values(by=sort_keys, ascending=[True] * len(sort_keys))
             
-            # 4. 사용자가 지정한 순서대로 열 배치
+            # 4. 사용자 지정 순서 정렬
             final_cols = list(dict.fromkeys(display_cols))
             ordered_final_cols = []
             for c in st.session_state.get('col_order', []):
                 if c in final_cols:
                     ordered_final_cols.append(c)
-            # 만약 지정되지 않은 컬럼이 있다면 맨 뒤에 붙이기
             for c in final_cols:
                 if c not in ordered_final_cols:
                     ordered_final_cols.append(c)
@@ -458,18 +480,25 @@ elif menu == "매니저 화면 (로그인)":
             if not ordered_final_cols:
                 st.warning("관리자 화면에서 표시할 항목을 추가해주세요.")
             else:
-                final_df = my_df[ordered_final_cols]
+                final_df = my_df[ordered_final_cols].copy()
                 
-                # 5. 세 자리 콤마(,) 서식 적용 및 테이블 표시
-                col_configs = {}
+                # 5. 세 자리 콤마(,) 포맷팅
                 for c in final_df.columns:
-                    # 해당 컬럼의 데이터가 숫자 형식이면 콤마 포맷팅 자동 적용
-                    if pd.api.types.is_numeric_dtype(final_df[c]):
-                        col_configs[c] = st.column_config.NumberColumn(format="{:,}")
+                    if '코드' not in c and '연도' not in c:
+                        def format_with_comma(val):
+                            try:
+                                if pd.isna(val) or str(val).strip() == "": return ""
+                                num = float(val)
+                                if num == 0: return "0"
+                                if num.is_integer(): return f"{int(num):,}"
+                                return f"{num:,.1f}"
+                            except:
+                                return val
+                        
+                        final_df[c] = final_df[c].apply(format_with_comma)
                 
                 st.dataframe(
                     final_df, 
                     use_container_width=True, 
-                    hide_index=True, 
-                    column_config=col_configs
+                    hide_index=True
                 )
