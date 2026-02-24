@@ -154,6 +154,7 @@ def load_data_and_config():
             st.session_state['merge_key1_col'] = str(data.get('merge_key1_col', ''))
             st.session_state['merge_key2_col'] = str(data.get('merge_key2_col', ''))
             st.session_state['col_groups'] = data.get('col_groups', []) if isinstance(data.get('col_groups'), list) else []
+            st.session_state['data_date'] = str(data.get('data_date', ''))
             
             # 기존 admin_cols에 fallback_col 키가 없으면 추가
             for item in st.session_state['admin_cols']:
@@ -178,6 +179,7 @@ def _reset_session_state():
     st.session_state['merge_key1_col'] = ''
     st.session_state['merge_key2_col'] = ''
     st.session_state['col_groups'] = []
+    st.session_state['data_date'] = ''
 
 def has_data():
     """df_merged가 유효한 DataFrame이고 비어있지 않은지 확인"""
@@ -197,6 +199,7 @@ def save_data_and_config():
         'merge_key1_col': st.session_state.get('merge_key1_col', ''),
         'merge_key2_col': st.session_state.get('merge_key2_col', ''),
         'col_groups': st.session_state.get('col_groups', []),
+        'data_date': st.session_state.get('data_date', ''),
     }
     with open(CONFIG_FILE, 'wb') as f:
         pickle.dump(data, f)
@@ -557,6 +560,27 @@ if menu == "관리자 화면 (설정)":
                 submit_merge = st.form_submit_button("🔄 데이터 병합 및 교체 (설정 유지)")
                 if submit_merge:
                     with st.spinner("데이터를 병합하고 저장 중입니다..."):
+                        # ✅ 파일 생성일자 추출 (최신 날짜 저장)
+                        from datetime import datetime
+                        file_dates = []
+                        for f_obj in [file1, file2]:
+                            if f_obj.name.endswith('.xlsx'):
+                                try:
+                                    from openpyxl import load_workbook
+                                    wb = load_workbook(io.BytesIO(f_obj.getvalue()), read_only=True)
+                                    props = wb.properties
+                                    d = props.modified or props.created
+                                    if d:
+                                        file_dates.append(d)
+                                    wb.close()
+                                except Exception:
+                                    pass
+                        if file_dates:
+                            latest = max(file_dates)
+                            st.session_state['data_date'] = latest.strftime("%Y.%m.%d")
+                        else:
+                            st.session_state['data_date'] = datetime.now().strftime("%Y.%m.%d")
+                        
                         df1['merge_key1'] = df1[key1].apply(clean_key)
                         df2['merge_key2'] = df2[key2].apply(clean_key)
                         df_merged = pd.merge(df1, df2, left_on='merge_key1', right_on='merge_key2', how='outer', suffixes=('_파일1', '_파일2'))
@@ -918,8 +942,12 @@ elif menu == "매니저 화면 (로그인)":
                 if not name_vals.empty:
                     manager_name = str(name_vals.iloc[0])
             
+            data_date = st.session_state.get('data_date', '')
+            date_html = f"<span style='font-size:14px; color:rgba(255,255,255,0.85); float:right; margin-top:8px;'>📅 데이터 기준일: {data_date}</span>" if data_date else ""
+            
             st.markdown(f"""
             <div class='toss-header'>
+                {date_html}
                 <h1 class='toss-title'>{manager_name} <span class='toss-subtitle'>({manager_code_clean})</span></h1>
                 <p class='toss-desc'>환영합니다! 산하 팀장분들의 실적 현황입니다. (총 {len(my_df)}명) 🚀</p>
             </div>
