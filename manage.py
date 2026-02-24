@@ -303,22 +303,27 @@ def render_html_table(df, col_groups=None):
             col_to_group[c] = grp['name']
     
     columns = list(df.columns)
-    group_info = []  # (group_name_or_None, 'first'|'mid'|'last'|'solo'|None)
+    
+    # 각 그룹의 가운데 셀 인덱스 계산
+    group_mid = {}  # group_name → column index that shows text
+    for gname in set(col_to_group.values()):
+        indices = [i for i, c in enumerate(columns) if col_to_group.get(c) == gname]
+        if indices:
+            group_mid[gname] = indices[len(indices) // 2]
+    
+    # group_info: (group_name, is_first, is_last, is_mid_text)
+    group_info = []
     for i, col in enumerate(columns):
         gname = col_to_group.get(col, None)
         if gname is None:
-            group_info.append((None, None))
+            group_info.append((None, False, False, False))
         else:
             prev_grp = col_to_group.get(columns[i-1], None) if i > 0 else None
             next_grp = col_to_group.get(columns[i+1], None) if i < len(columns)-1 else None
-            if prev_grp == gname and next_grp == gname:
-                group_info.append((gname, 'mid'))
-            elif prev_grp != gname and next_grp == gname:
-                group_info.append((gname, 'first'))
-            elif prev_grp == gname and next_grp != gname:
-                group_info.append((gname, 'last'))
-            else:
-                group_info.append((gname, 'solo'))  # 1열 그룹
+            is_first = (prev_grp != gname)
+            is_last = (next_grp != gname)
+            is_text = (i == group_mid.get(gname, -1))
+            group_info.append((gname, is_first, is_last, is_text))
     
     def fc(i):
         """freeze class"""
@@ -351,18 +356,11 @@ def render_html_table(df, col_groups=None):
     /* 그룹 행 */
     .perf-table .rg th {{ top: 0; height: {grp_h}px; padding: 4px 6px; cursor: default; }}
     .perf-table .rg .ge {{ background: #4e5968; border-bottom-color: #4e5968; }}
-    /* gf/gm/gl/gs: 색상은 inline style로 그룹별 적용 */
-    .perf-table .rg .gf {{ border-right: none; position: relative; overflow: visible; }}
-    .perf-table .rg .gm {{ border-left: none; border-right: none; font-size: 0; }}
-    .perf-table .rg .gl {{ border-left: none; font-size: 0; }}
-    .perf-table .rg .gs {{ }}
-    /* 그룹 제목 라벨 (JS로 가운데 배치) */
-    .grp-lbl {{
-        position: absolute; top: 0; left: 0;
-        height: 100%; display: flex; align-items: center; justify-content: center;
-        pointer-events: none; font-weight: 700; white-space: nowrap;
-        font-size: {base_font}px; color: #fff;
-    }}
+    /* 그룹 셀: 내부 border 제거로 시각적 병합 */
+    .perf-table .rg .gc {{ border-left: none; border-right: none; }}
+    .perf-table .rg .gc-first {{ border-left: 1px solid #3d4654; border-right: none; }}
+    .perf-table .rg .gc-last {{ border-left: none; border-right: 1px solid #3d4654; }}
+    .perf-table .rg .gc-solo {{ border-left: 1px solid #3d4654; border-right: 1px solid #3d4654; }}
     /* 컬럼 행 */
     .perf-table .rc th {{
         top: {grp_h if has_groups else 0}px; height: {col_h}px;
@@ -401,20 +399,24 @@ def render_html_table(df, col_groups=None):
     if has_groups:
         html += '<tr class="rg">'
         for i, col in enumerate(columns):
-            gname, pos = group_info[i]
+            gname, is_first, is_last, is_text = group_info[i]
             f_cls = fc(i)
             if gname is None:
                 html += f'<th class="ge {f_cls}" data-col="{i}"></th>'
             else:
                 gc = group_color_map.get(gname, '#364152')
-                if pos == 'first':
-                    html += f'<th class="gf {f_cls}" style="background:{gc};" data-col="{i}" data-grp="{gname}"><span class="grp-lbl" data-grp-lbl="{gname}">{gname}</span></th>'
-                elif pos == 'mid':
-                    html += f'<th class="gm {f_cls}" style="background:{gc};" data-col="{i}" data-grp="{gname}">&nbsp;</th>'
-                elif pos == 'last':
-                    html += f'<th class="gl {f_cls}" style="background:{gc};" data-col="{i}" data-grp="{gname}">&nbsp;</th>'
-                else:  # solo
-                    html += f'<th class="gs {f_cls}" style="background:{gc};" data-col="{i}" data-grp="{gname}">{gname}</th>'
+                # border 클래스 결정
+                if is_first and is_last:
+                    b_cls = "gc-solo"
+                elif is_first:
+                    b_cls = "gc-first"
+                elif is_last:
+                    b_cls = "gc-last"
+                else:
+                    b_cls = "gc"
+                # 가운데 셀에만 텍스트 표시
+                text = gname if is_text else ""
+                html += f'<th class="{b_cls} {f_cls}" style="background:{gc};" data-col="{i}">{text}</th>'
         html += '</tr>'
     
     # ── 컬럼 행: 항상 N개 <th> ──
@@ -459,21 +461,8 @@ def render_html_table(df, col_groups=None):
             window.frameElement.style.height = Math.min(w.scrollHeight + 4, Math.round(vh * 0.85)) + "px";
         }}
     }}
-    function centerGroupLabels() {{
-        var labels = document.querySelectorAll('.grp-lbl');
-        labels.forEach(function(lbl) {{
-            var grpName = lbl.getAttribute('data-grp-lbl');
-            var firstTh = lbl.parentElement;
-            // 같은 그룹의 모든 셀 찾기
-            var grpCells = document.querySelectorAll('.rg th[data-grp="' + grpName + '"]');
-            if (grpCells.length === 0) return;
-            var totalWidth = 0;
-            grpCells.forEach(function(c) {{ totalWidth += c.offsetWidth; }});
-            lbl.style.width = totalWidth + 'px';
-        }});
-    }}
-    window.addEventListener('load', function() {{ applyFreeze(); centerGroupLabels(); autoResize(); }});
-    window.addEventListener('resize', function() {{ applyFreeze(); centerGroupLabels(); autoResize(); }});
+    window.addEventListener('load', function() {{ applyFreeze(); autoResize(); }});
+    window.addEventListener('resize', function() {{ applyFreeze(); autoResize(); }});
     var ss = {{}};
     function sortTable(th) {{
         var t = document.getElementById("{table_id}");
