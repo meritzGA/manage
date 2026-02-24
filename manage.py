@@ -483,6 +483,12 @@ def render_html_table(df, col_groups=None):
     .perf-table .rg .gc-first {{ border-left: 1px solid #3d4654; border-right: none; }}
     .perf-table .rg .gc-last {{ border-left: none; border-right: 1px solid #3d4654; }}
     .perf-table .rg .gc-solo {{ border-left: 1px solid #3d4654; border-right: 1px solid #3d4654; }}
+    /* 모바일용 컬럼 헤더 색상 바 (기본 숨김) */
+    .perf-table .rc th .grp-bar {{
+        display: none;
+        height: 4px; border-radius: 2px;
+        margin: 0 auto 3px auto; width: 80%;
+    }}
     /* 컬럼 행 */
     .perf-table .rc th {{
         top: {grp_h if has_groups else 0}px; height: {col_h}px;
@@ -515,18 +521,19 @@ def render_html_table(df, col_groups=None):
         .perf-table {{ font-size: {mob_font}px; }}
         .perf-table thead th {{ padding: 4px 5px; }}
         .perf-table tbody td {{ padding: 4px 5px; }}
-        .perf-table .rg th {{ height: {grp_h - 4}px; padding: 2px 4px; font-size: {mob_font}px; }}
-        .perf-table .rc th {{ height: {col_h - 6}px; padding: 4px 5px; }}
+        /* 그룹 행 숨김 → 색상 바로 대체 */
+        .perf-table .rg {{ display: none; }}
+        .perf-table .rc th {{ top: 0 !important; padding: 5px 5px 4px 5px; }}
+        .perf-table .rc th .grp-bar {{ display: block; }}
         .sa {{ font-size: 8px; margin-left: 1px; }}
-        /* 좌측 고정 최대 2열로 제한 (좁은 화면) */
         .col-freeze-last {{ box-shadow: 2px 0 3px rgba(0,0,0,0.12); }}
     }}
     /* 📱 소형 모바일 */
     @media (max-width: 480px) {{
         .perf-table {{ font-size: {max(8, mob_font - 1)}px; }}
         .perf-table thead th, .perf-table tbody td {{ padding: 3px 3px; }}
-        .perf-table .rg th {{ height: {grp_h - 8}px; font-size: {max(8, mob_font - 1)}px; }}
-        .perf-table .rc th {{ height: {col_h - 10}px; }}
+        .perf-table .rc th {{ padding: 4px 3px 3px 3px; }}
+        .perf-table .rc th .grp-bar {{ height: 3px; margin-bottom: 2px; }}
     }}
     </style>
     """
@@ -563,7 +570,13 @@ def render_html_table(df, col_groups=None):
     html += '<tr class="rc">'
     for i, col in enumerate(columns):
         f_cls = fc(i)
-        html += f'<th class="{f_cls}" data-col="{i}" onclick="sortTable(this)">{col} <span class="sa">▲▼</span></th>'
+        gname = col_to_group.get(col, None)
+        if gname:
+            gc = group_color_map.get(gname, '#364152')
+            bar = f'<div class="grp-bar" style="background:{gc};"></div>'
+        else:
+            bar = ''
+        html += f'<th class="{f_cls}" data-col="{i}" onclick="sortTable(this)">{bar}{col} <span class="sa">▲▼</span></th>'
     html += '</tr></thead><tbody>'
 
     # ── 본문 ──
@@ -886,7 +899,7 @@ if menu == "관리자 화면 (설정)":
                 with row_c1:
                     disp = item.get('display_name', item['col'])
                     fb_text = f" ← 대체: `{item['fallback_col']}`" if item.get('fallback_col') else ""
-                    st.markdown(f"- 📄 원본: `{item['col']}`{fb_text} ➡️ **화면 표시: [{disp}]** ({item['type']}) | 조건: `{item['condition']}`")
+                    st.markdown(f"- 📄 원본: `{item['col']}`{fb_text} → **화면 표시: [{disp}]** ({item['type']}) | 조건: `{item['condition']}`")
                 with row_c2:
                     if st.button("❌ 삭제", key=f"del_col_{i}"):
                         st.session_state['admin_cols'].pop(i)
@@ -975,7 +988,7 @@ if menu == "관리자 화면 (설정)":
                 row_c1, row_c2 = st.columns([8, 2])
                 with row_c1:
                     cond_strs = [f"`{c['col']}` {c['cond']}" for c in cat.get('conditions', [{'col': cat.get('col'), 'cond': cat.get('condition')}])]
-                    st.markdown(f"- 조건: **{' AND '.join(cond_strs)}** ➡️ **[{cat['name']}]** 태그 부여")
+                    st.markdown(f"- 조건: **{' AND '.join(cond_strs)}** → **[{cat['name']}]** 태그 부여")
                 with row_c2:
                     if st.button("❌ 삭제", key=f"del_cat_{i}"):
                         st.session_state['admin_categories'].pop(i)
