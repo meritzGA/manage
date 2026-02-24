@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -49,11 +48,53 @@ html, body, [class*="css"] {
     margin: 12px 0 0 0;
     font-weight: 500;
 }
-/* 데이터프레임 둥글게 */
-[data-testid="stDataFrame"] {
+
+/* ===============================================
+   실적 테이블 스타일 (HTML 테이블 전용)
+   =============================================== */
+.perf-table-wrap {
+    width: 100%;
+    overflow-x: auto;
     border-radius: 12px;
-    overflow: hidden;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+    box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+    margin-top: 8px;
+}
+.perf-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+    white-space: nowrap;
+}
+/* 헤더: 짙은 회색 배경 + 흰색 글씨 */
+.perf-table thead th {
+    background-color: #4e5968;
+    color: #ffffff;
+    font-weight: 700;
+    text-align: center;
+    padding: 10px 14px;
+    border: 1px solid #3d4654;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+/* 본문 셀: 가운데 정렬 */
+.perf-table tbody td {
+    text-align: center;
+    padding: 8px 12px;
+    border: 1px solid #e5e8eb;
+}
+/* 짝수 행 배경 */
+.perf-table tbody tr:nth-child(even) {
+    background-color: #f7f8fa;
+}
+/* 호버 효과 */
+.perf-table tbody tr:hover {
+    background-color: #eef1f6;
+}
+/* 부족금액 강조: 다크레드 */
+.shortfall-cell {
+    color: rgb(128, 0, 0);
+    font-weight: 700;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -121,6 +162,8 @@ def clean_key(val):
 # 숫자/텍스트 혼동 및 콤마 완벽 해결 평가 함수
 def evaluate_condition(df, col, cond):
     cond_clean = re.sub(r'(?<=\d),(?=\d)', '', cond).strip()
+    # ✅ 단일 = 를 == 로 자동 변환 (>=, <=, !=, == 는 건드리지 않음)
+    cond_clean = re.sub(r'(?<![><!= ])=(?!=)', '==', cond_clean)
     try:
         temp_s = df[col].astype(str).str.replace(',', '', regex=False)
         num_s = pd.to_numeric(temp_s, errors='coerce')
@@ -132,7 +175,7 @@ def evaluate_condition(df, col, cond):
         else: return pd.Series(bool(mask), index=df.index)
     except Exception:
         try:
-            mask = df.eval(f"`{col}` {cond}", engine='python')
+            mask = df.eval(f"`{col}` {cond_clean}", engine='python')
             if isinstance(mask, pd.Series): return mask.fillna(False).astype(bool)
             else: return pd.Series(bool(mask), index=df.index)
         except Exception:
@@ -148,6 +191,31 @@ def load_file_data(file_bytes, file_name):
         if df[col].dtype == object:
             df[col] = df[col].apply(decode_excel_text)
     return df
+
+# ==========================================
+# ★ HTML 테이블 렌더링 함수
+# ==========================================
+def render_html_table(df):
+    """DataFrame을 짙은회색 헤더 + 가운데 정렬 HTML 테이블로 변환"""
+    shortfall_cols = [c for c in df.columns if '부족금액' in c]
+
+    html = '<div class="perf-table-wrap"><table class="perf-table"><thead><tr>'
+    for col in df.columns:
+        html += f'<th>{col}</th>'
+    html += '</tr></thead><tbody>'
+
+    for _, row in df.iterrows():
+        html += '<tr>'
+        for col in df.columns:
+            val = row[col]
+            cell_val = "" if pd.isna(val) else str(val)
+            if col in shortfall_cols and cell_val and cell_val != "":
+                html += f'<td class="shortfall-cell">{cell_val}</td>'
+            else:
+                html += f'<td>{cell_val}</td>'
+        html += '</tr>'
+    html += '</tbody></table></div>'
+    return html
 
 # ==========================================
 # 3. 사이드바 (메뉴 선택)
@@ -484,42 +552,14 @@ elif menu == "매니저 화면 (로그인)":
                                 if pd.isna(val) or str(val).strip() == "": return ""
                                 clean_val = str(val).replace(',', '')
                                 num = float(clean_val)
-                                
-                                # 0이면 화면에 아예 표시되지 않도록 빈 문자열 반환
-                                if num == 0: return "" 
-                                
+                                if num == 0: return ""
                                 if num.is_integer(): return f"{int(num):,}"
                                 return f"{num:,.1f}"
                             except:
-                                # 문자열인 경우 원본 유지 (하지만 문자 '0'도 삭제)
                                 if str(val).strip() == "0" or str(val).strip() == "0.0": return ""
                                 return val
                         
                         final_df[c] = final_df[c].apply(format_with_comma_and_hide_zero)
                 
-                # 6. 완벽한 가운데 정렬 및 다크레드 디자인 적용 (Pandas Styler 활용)
-                def style_dataframe(df):
-                    styler = df.style
-                    
-                    # (1) 모든 셀 내용 완벽한 가운데 정렬 적용 (숫자 포함)
-                    styler = styler.set_properties(**{'text-align': 'center !important'})
-                    
-                    # (2) 부족금액 폰트색상 '다크레드' 적용
-                    shortfall_cols = [c for c in df.columns if '부족금액' in c]
-                    if shortfall_cols:
-                        for sc in shortfall_cols:
-                            styler = styler.map(lambda x: 'color: rgb(128, 0, 0); font-weight: bold;' if pd.notna(x) and x != "" else '', subset=[sc])
-                    
-                    # (3) 표 헤더 짙은 회색 배경 + 흰색 글씨 + 가운데 정렬 적용
-                    styler = styler.set_table_styles([
-                        {'selector': 'th', 'props': [('background-color', '#4e5968'), ('color', 'white'), ('font-weight', 'bold'), ('text-align', 'center !important')]},
-                        {'selector': 'thead th', 'props': [('background-color', '#4e5968'), ('color', 'white'), ('text-align', 'center !important')]},
-                        {'selector': 'td', 'props': [('text-align', 'center !important')]}
-                    ])
-                    return styler
-
-                st.dataframe(
-                    style_dataframe(final_df), 
-                    use_container_width=True, 
-                    hide_index=True
-                )
+                # 6. ★ HTML 테이블로 렌더링 (짙은 회색 헤더 + 흰색 글씨 + 가운데 정렬)
+                st.markdown(render_html_table(final_df), unsafe_allow_html=True)
