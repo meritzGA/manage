@@ -24,13 +24,21 @@ if 'admin_categories' not in st.session_state:
 # 2. 공통 함수
 # ==========================================
 def clean_special_chars(val):
-    """엑셀 특수문자 제거, 공백 제거, 대소문자 통일, .0 텍스트 이슈 완벽 해결"""
+    """엑셀 특수문자(_x0033_ 등)를 실제 숫자('3')로 복원하고 공백을 제거하는 완벽 정제 함수"""
     if pd.isna(val) or str(val).strip().lower() == 'nan':
         return ""
     val_str = str(val).strip()
-    # 엑셀 특수문자(_x0033_ 등) 제거
-    val_str = re.sub(r'_x[0-9a-fA-F]{4}_', '', val_str)
-    # 모든 공백 제거 및 대문자 변환(검색 일치율 향상)
+    
+    # 엑셀 특수문자(_xHHHH_)를 실제 문자로 디코딩 (예: _x0033_ -> 3, _x0031_ -> 1)
+    def decode_match(match):
+        try:
+            return chr(int(match.group(1), 16))
+        except:
+            return match.group(0)
+            
+    val_str = re.sub(r'_x([0-9a-fA-F]{4})_', decode_match, val_str)
+    
+    # 공백 제거 및 대문자 변환
     val_str = val_str.replace(" ", "").upper()
     # 숫자로 인식되어 .0 이 붙은 경우 제거
     if val_str.endswith('.0'):
@@ -83,6 +91,7 @@ if menu == "관리자 화면 (설정)":
                 submit_merge = st.form_submit_button("데이터 병합 실행")
                 if submit_merge:
                     with st.spinner("데이터를 병합하고 있습니다..."):
+                        # 데이터 복원 정제 적용
                         df1[key1] = df1[key1].apply(clean_special_chars)
                         df2[key2] = df2[key2].apply(clean_special_chars)
                         df_merged = pd.merge(df1, df2, left_on=key1, right_on=key2, how='outer', suffixes=('_파일1', '_파일2'))
@@ -240,11 +249,11 @@ elif menu == "매니저 화면 (로그인)":
         submit_login = st.form_submit_button("로그인 및 조회")
     
     if submit_login and manager_code:
-        # 데이터 클렌징
+        # 데이터 복원 정제 적용
         df[manager_col] = df[manager_col].apply(clean_special_chars)
         manager_code_clean = clean_special_chars(manager_code)
         
-        # 필터링 진행 (대소문자/공백/엑셀특수문자 모두 제거된 상태로 완벽 일치 검색)
+        # 완전 일치 검색
         my_df = df[df[manager_col] == manager_code_clean].copy()
         
         # 완전 일치가 안 될 경우 포함(Contains) 조건으로 재검색
@@ -252,11 +261,7 @@ elif menu == "매니저 화면 (로그인)":
             my_df = df[df[manager_col].str.contains(manager_code_clean, na=False)].copy()
 
         if my_df.empty:
-            # 원인 파악을 위한 친절한 에러 메시지
             st.error(f"❌ '{manager_col}' 열에서 매니저 코드 '{manager_code_clean}'에 일치하는 데이터를 찾을 수 없습니다.")
-            st.info("💡 **확인사항:**\n"
-                    "1. 관리자 화면 [2번] 설정에서 매니저 코드가 들어있는 올바른 열을 선택했는지 확인해주세요.\n"
-                    "2. 병합(Merge)시 선택한 파일 기준에 따라 한 쪽에만 매니저 코드가 존재할 수 있습니다.")
         else:
             st.success(f"총 {len(my_df)}명의 설계사 데이터가 조회되었습니다.")
             
