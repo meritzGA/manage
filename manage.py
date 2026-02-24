@@ -314,19 +314,16 @@ if menu == "관리자 화면 (설정)":
         for g_col in st.session_state['admin_goals'].keys(): 
             expected_cols.extend([f"{g_col} 다음목표", f"{g_col} 부족금액"])
             
-        # 새로운 항목이 추가되거나 삭제되었을 때 동기화
         current_order = st.session_state.get('col_order', [])
         valid_order = [c for c in current_order if c in expected_cols]
         for c in expected_cols:
             if c not in valid_order:
                 valid_order.append(c)
                 
-        # 변경사항 세션에 즉시 반영
         if st.session_state.get('col_order', []) != valid_order:
             st.session_state['col_order'] = valid_order
             save_data_and_config()
 
-        # [새롭게 추가된 직관적인 버튼식 순서 변경 UI]
         if st.session_state['col_order']:
             st.write("---")
             for i, col_name in enumerate(st.session_state['col_order']):
@@ -389,7 +386,7 @@ elif menu == "매니저 화면 (로그인)":
             
             display_cols = []
             
-            # (1) 일반 항목 표시
+            # (1) 일반 항목 표시 (에러 방지용 완전방어 로직)
             for item in st.session_state['admin_cols']:
                 orig_col = item['col']
                 disp_col = item.get('display_name', orig_col)
@@ -399,6 +396,13 @@ elif menu == "매니저 화면 (로그인)":
                         temp_df = my_df.copy()
                         temp_df[orig_col] = pd.to_numeric(temp_df[orig_col], errors='coerce').fillna(0)
                         mask = temp_df.eval(f"`{orig_col}` {item['condition']}")
+                        
+                        # [핵심] Pandas 버전에 따른 Series/DataFrame 강제 Boolean 변환 처리
+                        if isinstance(mask, pd.Series):
+                            mask = mask.fillna(False).astype(bool)
+                        else:
+                            mask = pd.Series(bool(mask), index=temp_df.index)
+                            
                         my_df = my_df[mask]
                     except Exception as e:
                         pass
@@ -423,7 +427,7 @@ elif menu == "매니저 화면 (로그인)":
                     if next_target_col not in display_cols:
                         display_cols.extend([next_target_col, shortfall_col])
 
-            # (3) 맞춤분류(태그) 설정
+            # (3) 맞춤분류(태그) 설정 (Boolean 충돌 완벽 방지 로직)
             if st.session_state['admin_categories']:
                 if '맞춤분류' not in my_df.columns:
                     my_df['맞춤분류'] = ""
@@ -439,15 +443,28 @@ elif menu == "매니저 화면 (로그인)":
                         c_cond = cond_info['cond']
                         
                         try:
+                            # 문자 포함 산식 계산 시도
                             mask = my_df.eval(f"`{c_col}` {c_cond}")
+                            # 완벽한 Boolean Series 강제화
+                            if isinstance(mask, pd.Series):
+                                mask = mask.fillna(False).astype(bool)
+                            else:
+                                mask = pd.Series(bool(mask), index=my_df.index)
                         except Exception:
                             try:
+                                # 문자가 섞인 숫자열을 0으로 처리한 뒤 계산 시도
                                 temp_df = my_df.copy()
                                 temp_df[c_col] = pd.to_numeric(temp_df[c_col], errors='coerce').fillna(0)
                                 mask = temp_df.eval(f"`{c_col}` {c_cond}")
+                                if isinstance(mask, pd.Series):
+                                    mask = mask.fillna(False).astype(bool)
+                                else:
+                                    mask = pd.Series(bool(mask), index=temp_df.index)
                             except Exception:
-                                mask = False
+                                # 그래도 실패하면 False로 처리하여 에러 방지
+                                mask = pd.Series(False, index=my_df.index)
                                 
+                        # 이제 완벽하게 Series(True/False)와 Series(True/False)만 결합됨
                         final_mask = final_mask & mask
                         
                     my_df.loc[final_mask, '맞춤분류'] += f"[{c_name}] "
