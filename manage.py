@@ -343,6 +343,17 @@ if menu == "관리자 화면 (설정)":
                             df1['merge_key1'] = df1[key1].apply(clean_key)
                             df2['merge_key2'] = df2[key2].apply(clean_key)
                             df_merged = pd.merge(df1, df2, left_on='merge_key1', right_on='merge_key2', how='outer', suffixes=('_파일1', '_파일2'))
+                            
+                            # ✅ suffix로 분리된 동일 열을 자동 통합 (coalesce)
+                            cols_1 = [c for c in df_merged.columns if c.endswith('_파일1')]
+                            for c1 in cols_1:
+                                base = c1.replace('_파일1', '')
+                                c2 = base + '_파일2'
+                                if c2 in df_merged.columns:
+                                    # 파일1 값 우선, 없으면 파일2 값 사용
+                                    df_merged[base] = df_merged[c1].combine_first(df_merged[c2])
+                                    df_merged.drop(columns=[c1, c2], inplace=True)
+                            
                             st.session_state['df_merged'] = df_merged
                             save_data_and_config()
                             st.success(f"데이터 병합 완료! 총 {len(df_merged)}행의 데이터가 안전하게 저장되었습니다.")
