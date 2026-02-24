@@ -11,7 +11,7 @@ st.set_page_config(page_title="지원매니저별 실적 관리 시스템", layo
 CONFIG_FILE = "app_config.pkl"
 
 # ==========================================
-# 0. 메리츠 스타일 커스텀 CSS (디자인 전면 개편)
+# 0. 메리츠 스타일 커스텀 CSS (가운데 정렬 강화)
 # ==========================================
 st.markdown("""
 <style>
@@ -19,7 +19,7 @@ st.markdown("""
 html, body, [class*="css"] {
     font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, 'Helvetica Neue', 'Segoe UI', 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif;
 }
-/* 1. 상단 매니저 박스: 메리츠 다크레드 바탕 */
+/* 상단 매니저 박스 */
 .toss-header {
     background-color: rgb(128, 0, 0);
     padding: 32px 40px;
@@ -27,39 +27,34 @@ html, body, [class*="css"] {
     margin-bottom: 24px;
     box-shadow: 0 4px 16px rgba(0,0,0,0.1);
 }
-/* 매니저 이름 흰색 강제 적용 */
 .toss-title {
     color: #ffffff !important; 
     font-size: 36px;
     font-weight: 800;
-    margin: 0;
-    letter-spacing: -0.5px;
 }
-/* 코드명 서브타이틀 */
 .toss-subtitle {
-    color: #ffcccc !important; 
+    color: #ffffff !important; 
+    opacity: 0.9;
     font-size: 24px;
     font-weight: 700;
     margin-left: 10px;
 }
 .toss-desc {
-    color: #f2f4f6 !important;
+    color: #ffffff !important;
+    opacity: 0.85;
     font-size: 17px;
-    margin: 12px 0 0 0;
-    font-weight: 500;
+    margin-top: 12px;
 }
-/* 데이터프레임 둥글게 */
-[data-testid="stDataFrame"] {
-    border-radius: 12px;
-    overflow: hidden;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+/* 표 전체 가운데 정렬 강제 적용 */
+[data-testid="stDataFrame"] div[data-testid="stTable"] th,
+[data-testid="stDataFrame"] div[data-testid="stTable"] td {
+    text-align: center !important;
 }
 </style>
 """, unsafe_allow_html=True)
 
-
 # ==========================================
-# 1. 설정 및 데이터 영구 저장/불러오기 함수
+# 1. 설정 및 데이터 영구 저장 함수
 # ==========================================
 def load_data_and_config():
     if os.path.exists(CONFIG_FILE):
@@ -73,8 +68,7 @@ def load_data_and_config():
                 st.session_state['admin_goals'] = data.get('admin_goals', {})
                 st.session_state['admin_categories'] = data.get('admin_categories', [])
                 st.session_state['col_order'] = data.get('col_order', [])
-        except:
-            pass 
+        except: pass 
 
 def save_data_and_config():
     data = {
@@ -91,16 +85,13 @@ def save_data_and_config():
 
 if 'df_merged' not in st.session_state:
     st.session_state['df_merged'] = pd.DataFrame()
-    st.session_state['manager_col'] = ""
-    st.session_state['manager_name_col'] = ""
-    st.session_state['admin_cols'] = []
-    st.session_state['admin_goals'] = {}
-    st.session_state['admin_categories'] = []
-    st.session_state['col_order'] = []
+    st.session_state['manager_col'] = ""; st.session_state['manager_name_col'] = ""
+    st.session_state['admin_cols'] = []; st.session_state['admin_goals'] = {}
+    st.session_state['admin_categories'] = []; st.session_state['col_order'] = []
     load_data_and_config()
 
 # ==========================================
-# 2. 데이터 정제 및 스마트 조건 평가 함수
+# 2. 데이터 정제/조건 평가 함수 (버그 수정)
 # ==========================================
 def decode_excel_text(val):
     if pd.isna(val): return val
@@ -117,24 +108,25 @@ def clean_key(val):
     if val_str.endswith('.0'): val_str = val_str[:-2]
     return val_str
 
-# 숫자/텍스트 혼동 및 콤마 완벽 해결 평가 함수
-def evaluate_condition(df, col, cond):
+def safe_eval_condition(df, col, cond):
+    """숫자 콤마 제거 후 조건을 안전하게 평가합니다."""
+    # 조건문 내의 콤마 제거
     cond_clean = re.sub(r'(?<=\d),(?=\d)', '', cond).strip()
     try:
+        # 데이터 내의 콤마 제거 후 숫자로 변환
         temp_s = df[col].astype(str).str.replace(',', '', regex=False)
-        num_s = pd.to_numeric(temp_s, errors='coerce')
-        if num_s.isna().all() and not temp_s.replace('', np.nan).isna().all():
-            raise ValueError("문자형 데이터입니다.")
-        temp_df = pd.DataFrame({col: num_s.fillna(0)})
-        mask = temp_df.eval(f"`{col}` {cond_clean}", engine='python')
-        if isinstance(mask, pd.Series): return mask.fillna(False).astype(bool)
-        else: return pd.Series(bool(mask), index=df.index)
-    except Exception:
+        num_s = pd.to_numeric(temp_s, errors='coerce').fillna(0)
+        
+        # 임시 데이터프레임으로 평가
+        eval_df = pd.DataFrame({col: num_s}, index=df.index)
+        mask = eval_df.eval(f"`{col}` {cond_clean}", engine='python')
+        return mask.fillna(False).astype(bool)
+    except:
         try:
+            # 텍스트 비교 시도 (예: == '정상')
             mask = df.eval(f"`{col}` {cond}", engine='python')
-            if isinstance(mask, pd.Series): return mask.fillna(False).astype(bool)
-            else: return pd.Series(bool(mask), index=df.index)
-        except Exception:
+            return mask.fillna(False).astype(bool)
+        except:
             return pd.Series(False, index=df.index)
 
 @st.cache_data(show_spinner=False)
@@ -149,7 +141,7 @@ def load_file_data(file_bytes, file_name):
     return df
 
 # ==========================================
-# 3. 사이드바 (메뉴 선택)
+# 3. 사이드바 메뉴
 # ==========================================
 st.sidebar.title("메뉴")
 menu = st.sidebar.radio("이동할 화면을 선택하세요", ["매니저 화면 (로그인)", "관리자 화면 (설정)"])
@@ -159,366 +151,205 @@ menu = st.sidebar.radio("이동할 화면을 선택하세요", ["매니저 화�
 # ==========================================
 if menu == "관리자 화면 (설정)":
     st.title("⚙️ 관리자 설정 화면")
-    
     st.header("1. 데이터 파일 업로드 및 관리")
     if not st.session_state['df_merged'].empty:
         st.success(f"✅ 현재 **{len(st.session_state['df_merged'])}행**의 데이터가 저장되어 운영 중입니다.")
-        if st.button("🗑️ 기존 파일 데이터 삭제 (새 파일 업로드 시)"):
+        if st.button("🗑️ 기존 파일 데이터 삭제"):
             st.session_state['df_merged'] = pd.DataFrame()
-            save_data_and_config()
-            st.rerun()
+            save_data_and_config(); st.rerun()
     else:
         col_file1, col_file2 = st.columns(2)
         with col_file1: file1 = st.file_uploader("첫 번째 파일 업로드", type=['csv', 'xlsx'])
         with col_file2: file2 = st.file_uploader("두 번째 파일 업로드", type=['csv', 'xlsx'])
-            
-        if file1 is not None and file2 is not None:
+        if file1 and file2:
             try:
-                with st.spinner("파일을 읽고 있습니다..."):
+                with st.spinner("파일 읽는 중..."):
                     df1 = load_file_data(file1.getvalue(), file1.name)
                     df2 = load_file_data(file2.getvalue(), file2.name)
-                cols1 = df1.columns.tolist()
-                cols2 = df2.columns.tolist()
                 with st.form("merge_form"):
-                    col_key1, col_key2 = st.columns(2)
-                    with col_key1: key1 = st.selectbox("첫 번째 파일의 [설계사 코드] 열 선택", cols1)
-                    with col_key2: key2 = st.selectbox("두 번째 파일의 [설계사 코드] 열 선택", cols2)
-                    
-                    submit_merge = st.form_submit_button("데이터 병합 및 시스템에 저장")
-                    if submit_merge:
-                        with st.spinner("데이터를 병합하고 저장 중입니다..."):
-                            df1['merge_key1'] = df1[key1].apply(clean_key)
-                            df2['merge_key2'] = df2[key2].apply(clean_key)
-                            df_merged = pd.merge(df1, df2, left_on='merge_key1', right_on='merge_key2', how='outer', suffixes=('_파일1', '_파일2'))
-                            st.session_state['df_merged'] = df_merged
-                            save_data_and_config()
-                            st.success(f"데이터 병합 완료! 총 {len(df_merged)}행의 데이터가 안전하게 저장되었습니다.")
-                            st.rerun()
-            except Exception as e:
-                st.error(f"파일을 읽는 중 오류가 발생했습니다: {e}")
-
-    st.divider()
+                    c_k1, c_k2 = st.columns(2)
+                    with c_k1: key1 = st.selectbox("첫 번째 파일 [설계사 코드] 열", df1.columns)
+                    with c_k2: key2 = st.selectbox("두 번째 파일 [설계사 코드] 열", df2.columns)
+                    if st.form_submit_button("병합 및 저장"):
+                        df1['m_key1'] = df1[key1].apply(clean_key)
+                        df2['m_key2'] = df2[key2].apply(clean_key)
+                        df_merged = pd.merge(df1, df2, left_on='m_key1', right_on='m_key2', how='outer', suffixes=('_파일1', '_파일2'))
+                        st.session_state['df_merged'] = df_merged
+                        save_data_and_config(); st.success("저장 완료!"); st.rerun()
+            except Exception as e: st.error(f"오류: {e}")
 
     if not st.session_state['df_merged'].empty:
         df = st.session_state['df_merged']
-        available_columns = [c for c in df.columns if c not in ['merge_key1', 'merge_key2']]
-        
-        # ========================================
-        st.header("2. 매니저 로그인 및 이름 표시 열 설정")
+        av_cols = [c for c in df.columns if c not in ['m_key1', 'm_key2']]
+        st.divider()
+        st.header("2. 매니저 로그인 열 설정")
         col_m1, col_m2, col_m3 = st.columns([4, 4, 2])
-        with col_m1:
-            manager_col = st.selectbox("🔑 로그인 [매니저 코드] 열", available_columns, 
-                                       index=available_columns.index(st.session_state['manager_col']) if st.session_state['manager_col'] in available_columns else 0)
-        with col_m2:
-            idx_name = available_columns.index(st.session_state['manager_name_col']) if st.session_state['manager_name_col'] in available_columns else 0
-            manager_name_col = st.selectbox("👤 화면 상단 [매니저 이름] 표시 열", available_columns, index=idx_name)
-        with col_m3:
-            st.write(""); st.write("")
-            if st.button("저장", key="btn_save_manager"):
-                st.session_state['manager_col'] = manager_col
-                st.session_state['manager_name_col'] = manager_name_col
-                save_data_and_config()
-                st.success("로그인 및 이름 열 설정이 저장되었습니다.")
+        with col_m1: manager_col = st.selectbox("🔑 매니저 코드 열", av_cols, index=av_cols.index(st.session_state['manager_col']) if st.session_state['manager_col'] in av_cols else 0)
+        with col_m2: manager_name_col = st.selectbox("👤 매니저 이름 열", av_cols, index=av_cols.index(st.session_state['manager_name_col']) if st.session_state['manager_name_col'] in av_cols else 0)
+        if st.button("저장"):
+            st.session_state['manager_col'] = manager_col; st.session_state['manager_name_col'] = manager_name_col
+            save_data_and_config(); st.success("저장됨")
 
         st.divider()
-
-        # ========================================
-        st.header("3. 표시할 데이터 항목 및 필터 추가")
+        st.header("3. 표시 항목 및 필터")
         c1, c2, c3, c4, c5 = st.columns([3, 2, 2, 2, 1])
-        with c1: sel_col = st.selectbox("항목 선택", available_columns, key="sec3_col")
-        with c2: display_name = st.text_input("표시 명칭 (선택)", placeholder="미입력시 원본유지", key="sec3_disp")
-        with c3: col_type = st.radio("데이터 타입", ["텍스트", "숫자"], horizontal=True, key="sec3_type")
-        with c4: condition = st.text_input("산식 (예: >= 500,000)", key="sec3_cond")
-        with c5:
-            st.write(""); st.write("")
-            if st.button("➕ 추가", key="btn_add_col"):
-                final_display_name = display_name.strip() if display_name.strip() else sel_col
-                st.session_state['admin_cols'].append({
-                    "col": sel_col, "display_name": final_display_name, "type": col_type, "condition": condition if col_type == "숫자" else ""
-                })
-                save_data_and_config()
-                st.rerun()
-
-        if st.session_state['admin_cols']:
-            for i, item in enumerate(st.session_state['admin_cols']):
-                row_c1, row_c2 = st.columns([8, 2])
-                with row_c1:
-                    disp = item.get('display_name', item['col'])
-                    st.markdown(f"- 📄 원본: `{item['col']}` ➡️ **화면 표시: [{disp}]** ({item['type']}) | 조건: `{item['condition']}`")
-                with row_c2:
-                    if st.button("❌ 삭제", key=f"del_col_{i}"):
-                        st.session_state['admin_cols'].pop(i)
-                        save_data_and_config()
-                        st.rerun()
+        with c1: sel_c = st.selectbox("항목", av_cols, key="s3c")
+        with c2: disp_n = st.text_input("표시명", key="s3n")
+        with c3: c_type = st.radio("타입", ["텍스트", "숫자"], horizontal=True, key="s3t")
+        with c4: cond = st.text_input("산식", key="s3cond")
+        if st.button("➕ 추가"):
+            st.session_state['admin_cols'].append({"col": sel_c, "display_name": disp_n if disp_n else sel_c, "type": c_type, "condition": cond})
+            save_data_and_config(); st.rerun()
+        for i, item in enumerate(st.session_state['admin_cols']):
+            r1, r2 = st.columns([8, 2])
+            with r1: st.write(f"- {item['display_name']} (원본: {item['col']}) | {item['condition']}")
+            with r2: 
+                if st.button("❌", key=f"d_c_{i}"): st.session_state['admin_cols'].pop(i); save_data_and_config(); st.rerun()
 
         st.divider()
-
-        # ========================================
-        st.header("4. 목표 구간 다중 설정")
+        st.header("4. 목표 구간")
         c1, c2, c3 = st.columns([3, 5, 2])
-        with c1: goal_col = st.selectbox("목표 구간을 적용할 항목", available_columns, key="sec4_col")
-        with c2: goal_tiers = st.text_input("구간 금액 입력 (예: 100000, 200000)", key="sec4_tiers")
-        with c3:
-            st.write(""); st.write("")
-            if st.button("➕ 구간 추가", key="btn_add_goal"):
-                if goal_tiers:
-                    tiers_list = [float(x.strip()) for x in goal_tiers.split(",") if x.strip().isdigit()]
-                    st.session_state['admin_goals'][goal_col] = sorted(tiers_list)
-                    save_data_and_config()
-                    st.rerun()
-                
-        if st.session_state['admin_goals']:
-            for g_col, tiers in list(st.session_state['admin_goals'].items()):
-                row_c1, row_c2 = st.columns([8, 2])
-                with row_c1: st.markdown(f"- **{g_col}**: {tiers}")
-                with row_c2:
-                    if st.button("❌ 삭제", key=f"del_goal_{g_col}"):
-                        del st.session_state['admin_goals'][g_col]
-                        save_data_and_config()
-                        st.rerun()
+        with c1: g_col = st.selectbox("항목", av_cols, key="s4c")
+        with c2: g_tiers = st.text_input("구간 (예: 100000, 200000)", key="s4t")
+        if st.button("➕ 구간 추가"):
+            if g_tiers:
+                st.session_state['admin_goals'][g_col] = sorted([float(x.strip()) for x in g_tiers.split(",") if x.strip().isdigit()])
+                save_data_and_config(); st.rerun()
+        for g, t in list(st.session_state['admin_goals'].items()):
+            r1, r2 = st.columns([8, 2])
+            with r1: st.write(f"- {g}: {t}")
+            with r2: 
+                if st.button("❌", key=f"d_g_{g}"): del st.session_state['admin_goals'][g]; save_data_and_config(); st.rerun()
 
         st.divider()
-
-        # ========================================
-        st.header("5. 맞춤형 분류(태그) 설정 (3개 조건 조합)")
-        with st.form("add_cat_form"):
+        st.header("5. 맞춤형 분류 (태그)")
+        with st.form("tag_form"):
             col1, col2 = st.columns(2)
             with col1:
-                cat_col1 = st.selectbox("1. 기준 열 선택", available_columns)
-                cat_col2 = st.selectbox("2. 기준 열 선택", ["(선택안함)"] + available_columns)
-                cat_col3 = st.selectbox("3. 기준 열 선택", ["(선택안함)"] + available_columns)
+                tc1 = st.selectbox("기준 1", av_cols); tc2 = st.selectbox("기준 2", ["(없음)"] + av_cols); tc3 = st.selectbox("기준 3", ["(없음)"] + av_cols)
             with col2:
-                cat_cond1 = st.text_input("1. 산식 (예: >= 500000, 텍스트는 == '정상')")
-                cat_cond2 = st.text_input("2. 산식 (예: > 0, 없으면 비워둠)")
-                cat_cond3 = st.text_input("3. 산식 (예: <= 100, 없으면 비워둠)")
-            cat_name = st.text_input("부여할 분류명 (예: VIP설계사)")
-            submit_cat = st.form_submit_button("➕ 기준 추가")
-            
-            if submit_cat:
-                conditions = []
-                if cat_cond1.strip() and cat_cond1.strip() != '상관없음': conditions.append({"col": cat_col1, "cond": cat_cond1.strip()})
-                if cat_col2 != "(선택안함)" and cat_cond2.strip() and cat_cond2.strip() != '상관없음': conditions.append({"col": cat_col2, "cond": cat_cond2.strip()})
-                if cat_col3 != "(선택안함)" and cat_cond3.strip() and cat_cond3.strip() != '상관없음': conditions.append({"col": cat_col3, "cond": cat_cond3.strip()})
-                if conditions and cat_name.strip():
-                    st.session_state['admin_categories'].append({"conditions": conditions, "name": cat_name.strip()})
-                    save_data_and_config()
-                    st.rerun()
-            
-        if st.session_state['admin_categories']:
-            for i, cat in enumerate(st.session_state['admin_categories']):
-                row_c1, row_c2 = st.columns([8, 2])
-                with row_c1:
-                    cond_strs = [f"`{c['col']}` {c['cond']}" for c in cat.get('conditions', [{'col': cat.get('col'), 'cond': cat.get('condition')}])]
-                    st.markdown(f"- 조건: **{' AND '.join(cond_strs)}** ➡️ **[{cat['name']}]** 태그 부여")
-                with row_c2:
-                    if st.button("❌ 삭제", key=f"del_cat_{i}"):
-                        st.session_state['admin_categories'].pop(i)
-                        save_data_and_config()
-                        st.rerun()
+                tk1 = st.text_input("산식 1"); tk2 = st.text_input("산식 2"); tk3 = st.text_input("산식 3")
+            t_name = st.text_input("태그 명칭")
+            if st.form_submit_button("➕ 태그 추가"):
+                conds = [{"col": tc1, "cond": tk1}]
+                if tc2 != "(없음)" and tk2: conds.append({"col": tc2, "cond": tk2})
+                if tc3 != "(없음)" and tk3: conds.append({"col": tc3, "cond": tk3})
+                if t_name: st.session_state['admin_categories'].append({"conditions": conds, "name": t_name}); save_data_and_config(); st.rerun()
+        for i, cat in enumerate(st.session_state['admin_categories']):
+            r1, r2 = st.columns([8, 2])
+            with r1: st.write(f"- {cat['name']}: {cat['conditions']}")
+            with r2: 
+                if st.button("❌", key=f"d_t_{i}"): st.session_state['admin_categories'].pop(i); save_data_and_config(); st.rerun()
 
         st.divider()
-
-        # ========================================
-        st.header("6. 📋 화면 표시 순서 커스텀 설정")
-        expected_cols = []
-        if st.session_state['admin_categories']: expected_cols.append("맞춤분류")
-        for item in st.session_state['admin_cols']: expected_cols.append(item.get('display_name', item['col']))
-        for g_col in st.session_state['admin_goals'].keys(): expected_cols.extend([f"{g_col} 다음목표", f"{g_col} 부족금액"])
-            
-        current_order = st.session_state.get('col_order', [])
-        valid_order = [c for c in current_order if c in expected_cols]
-        for c in expected_cols:
-            if c not in valid_order:
-                valid_order.append(c)
-                
-        if st.session_state.get('col_order', []) != valid_order:
-            st.session_state['col_order'] = valid_order
-            save_data_and_config()
-
-        if st.session_state['col_order']:
-            st.write("---")
-            for i, col_name in enumerate(st.session_state['col_order']):
-                c1, c2, c3 = st.columns([8, 1, 1])
-                with c1: st.markdown(f"**{i+1}.** {col_name}")
-                with c2:
-                    if st.button("🔼", key=f"up_{i}", disabled=(i == 0)):
-                        st.session_state['col_order'][i], st.session_state['col_order'][i-1] = st.session_state['col_order'][i-1], st.session_state['col_order'][i]
-                        save_data_and_config()
-                        st.rerun()
-                with c3:
-                    if st.button("🔽", key=f"down_{i}", disabled=(i == len(st.session_state['col_order']) - 1)):
-                        st.session_state['col_order'][i], st.session_state['col_order'][i+1] = st.session_state['col_order'][i+1], st.session_state['col_order'][i]
-                        save_data_and_config()
-                        st.rerun()
-            st.write("---")
-            
-    else:
-        st.info("👆 먼저 위에서 두 파일을 업로드하고 [데이터 병합 및 시스템에 저장]을 눌러주세요.")
+        st.header("6. 표시 순서 및 정렬")
+        expected = []
+        if st.session_state['admin_categories']: expected.append("맞춤분류")
+        for item in st.session_state['admin_cols']: expected.append(item['display_name'])
+        for g_col in st.session_state['admin_goals'].keys(): expected.extend([f"{g_col} 다음목표", f"{g_col} 부족금액"])
+        current_o = st.session_state.get('col_order', [])
+        valid_o = [c for c in current_o if c in expected]
+        for c in expected:
+            if c not in valid_o: valid_o.append(c)
+        st.session_state['col_order'] = valid_o
+        for i, col_n in enumerate(st.session_state['col_order']):
+            c1, c2, c3 = st.columns([8, 1, 1])
+            with c1: st.write(f"{i+1}. {col_n}")
+            with c2: 
+                if st.button("🔼", key=f"up_{i}", disabled=(i==0)):
+                    st.session_state['col_order'][i], st.session_state['col_order'][i-1] = st.session_state['col_order'][i-1], st.session_state['col_order'][i]
+                    save_data_and_config(); st.rerun()
+            with c3:
+                if st.button("🔽", key=f"dn_{i}", disabled=(i==len(st.session_state['col_order'])-1)):
+                    st.session_state['col_order'][i], st.session_state['col_order'][i+1] = st.session_state['col_order'][i+1], st.session_state['col_order'][i]
+                    save_data_and_config(); st.rerun()
 
 # ==========================================
 # 5. 매니저 화면 (Manager View)
 # ==========================================
 elif menu == "매니저 화면 (로그인)":
-    if st.session_state['df_merged'].empty or not st.session_state['manager_col']:
-        st.title("👤 매니저 전용 실적 현황")
-        st.warning("현재 저장된 데이터가 없거나 관리자 설정이 완료되지 않았습니다.")
-        st.stop()
-        
-    df = st.session_state['df_merged'].copy()
-    manager_col = st.session_state['manager_col']
-    manager_name_col = st.session_state.get('manager_name_col', manager_col)
+    if st.session_state['df_merged'].empty:
+        st.warning("데이터가 없습니다. 관리자 화면에서 업로드하세요."); st.stop()
     
     with st.form("login_form"):
-        manager_code = st.text_input("🔑 매니저 코드를 입력하세요", type="password")
-        submit_login = st.form_submit_button("로그인 및 조회")
-    
-    if submit_login and manager_code:
-        df['search_key'] = df[manager_col].apply(clean_key)
-        manager_code_clean = clean_key(manager_code)
-        
-        my_df = df[df['search_key'] == manager_code_clean].copy()
-        if my_df.empty:
-            my_df = df[df['search_key'].str.contains(manager_code_clean, na=False)].copy()
+        m_code = st.text_input("🔑 매니저 코드 입력", type="password")
+        if st.form_submit_button("조회"):
+            st.session_state['current_m'] = m_code
+            
+    if st.session_state.get('current_m'):
+        df = st.session_state['df_merged'].copy()
+        m_col = st.session_state['manager_col']
+        df['s_key'] = df[m_col].apply(clean_key)
+        m_code_clean = clean_key(st.session_state['current_m'])
+        my_df = df[df['s_key'] == m_code_clean].copy()
+        if my_df.empty: my_df = df[df['s_key'].str.contains(m_code_clean, na=False)].copy()
 
-        if my_df.empty:
-            st.error(f"❌ 매니저 코드 '{manager_code}'에 일치하는 데이터를 찾을 수 없습니다.")
+        if my_df.empty: st.error("일치하는 데이터가 없습니다.")
         else:
-            manager_name = str(my_df[manager_name_col].iloc[0]) if manager_name_col in my_df.columns else "매니저"
-            
-            st.markdown(f"""
-            <div class='toss-header'>
-                <h1 class='toss-title'>{manager_name} <span class='toss-subtitle'>({manager_code_clean})</span></h1>
-                <p class='toss-desc'>환영합니다! 산하 팀장분들의 실적 현황입니다. 🚀</p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            display_cols = []
+            # 상단 헤더
+            m_name = str(my_df[st.session_state['manager_name_col']].iloc[0]) if st.session_state['manager_name_col'] in my_df.columns else "매니저"
+            st.markdown(f"<div class='toss-header'><h1 class='toss-title'>{m_name} <span class='toss-subtitle'>({m_code_clean})</span></h1><p class='toss-desc'>환영합니다! 산하 팀장분들의 실적 현황입니다. 🚀</p></div>", unsafe_allow_html=True)
             
             # -------------------------------------------------------------------
-            # ⭐ (1) 가장 먼저 "맞춤분류(태그)" 평가 실행 (원본 데이터 손실 전)
+            # ⭐ (1) 로직 최상단: 맞춤분류(태그) 실행 (원본 데이터 유지 상태)
             # -------------------------------------------------------------------
             if st.session_state['admin_categories']:
-                if '맞춤분류' not in my_df.columns:
-                    my_df['맞춤분류'] = ""
+                my_df['맞춤분류'] = ""
                 for cat in st.session_state['admin_categories']:
-                    c_name = cat.get('name', '')
                     final_mask = pd.Series(True, index=my_df.index)
-                    cond_list = cat.get('conditions', [{'col': cat.get('col'), 'cond': cat.get('condition')}])
-                    
-                    for cond_info in cond_list:
-                        if not cond_info.get('col'): continue
-                        mask = evaluate_condition(my_df, cond_info['col'], cond_info['cond'])
+                    for cond in cat['conditions']:
+                        mask = safe_eval_condition(my_df, cond['col'], cond['cond'])
                         final_mask = final_mask & mask
-                        
-                    my_df.loc[final_mask, '맞춤분류'] += f"[{c_name}] "
-                display_cols.append('맞춤분류')
+                    my_df.loc[final_mask, '맞춤분류'] += f"[{cat['name']}] "
             
-            # -------------------------------------------------------------------
-            # (2) 일반 항목 필터 및 데이터 삭제 실행
-            # -------------------------------------------------------------------
+            # (2) 필터링 및 일반 항목 명칭 부여
+            disp_cols = []
+            if st.session_state['admin_categories']: disp_cols.append("맞춤분류")
+            
             for item in st.session_state['admin_cols']:
-                orig_col = item['col']
-                disp_col = item.get('display_name', orig_col)
-                
+                o_c, d_n = item['col'], item['display_name']
                 if item['type'] == '숫자' and item['condition']:
-                    mask = evaluate_condition(my_df, orig_col, item['condition'])
-                    my_df = my_df[mask]
-                
-                my_df[disp_col] = my_df[orig_col]
-                display_cols.append(disp_col)
+                    my_df = my_df[safe_eval_condition(my_df, o_c, item['condition'])]
+                my_df[d_n] = my_df[o_c]
+                disp_cols.append(d_n)
             
-            # -------------------------------------------------------------------
-            # (3) 목표 구간 처리 (20만 등 텍스트 변환)
-            # -------------------------------------------------------------------
-            for g_col, tiers in st.session_state['admin_goals'].items():
-                if g_col in my_df.columns:
-                    cleaned_str = my_df[g_col].astype(str).str.replace(',', '', regex=False)
-                    my_df[g_col] = pd.to_numeric(cleaned_str, errors='coerce').fillna(0)
-                    
-                    def calc_shortfall(val):
+            # (3) 목표 구간
+            for g, tiers in st.session_state['admin_goals'].items():
+                if g in my_df.columns:
+                    val_s = pd.to_numeric(my_df[g].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+                    def get_g(v):
                         for t in tiers:
-                            if val < t:
-                                if t % 10000 == 0: tier_str = f"{int(t)//10000}만"
-                                else: tier_str = f"{t/10000:g}만"
-                                return pd.Series([tier_str, t - val])
-                        return pd.Series(["최고 구간 달성", 0])
-                    
-                    next_target_col = f"{g_col} 다음목표"
-                    shortfall_col = f"{g_col} 부족금액"
-                    
-                    my_df[[next_target_col, shortfall_col]] = my_df[g_col].apply(calc_shortfall)
-                    if next_target_col not in display_cols:
-                        display_cols.extend([next_target_col, shortfall_col])
+                            if v < t: return pd.Series([f"{int(t/10000) if t%10000==0 else t/10000:g}만", t-v])
+                        return pd.Series(["최고 달성", 0])
+                    nt, sf = f"{g} 다음목표", f"{g} 부족금액"
+                    my_df[[nt, sf]] = val_s.apply(get_g)
+                    disp_cols.extend([nt, sf])
 
-            # 3. 데이터 정렬
-            sort_keys = []
-            if '맞춤분류' in my_df.columns: sort_keys.append('맞춤분류')
-            ji_cols = [c for c in display_cols if '지사명' in c]
-            if not ji_cols: ji_cols = [c for c in my_df.columns if '지사명' in c]
-            if ji_cols: sort_keys.append(ji_cols[0])
-            gender_name_cols = [c for c in display_cols if '성별' in c or '설계사명' in c or '성명' in c or '이름' in c or '팀장명' in c]
-            if not gender_name_cols: gender_name_cols = [c for c in my_df.columns if '성별' in c or '설계사명' in c or '성명' in c or '팀장명' in c]
-            if gender_name_cols: sort_keys.append(gender_name_cols[0])
-            if sort_keys:
-                my_df = my_df.sort_values(by=sort_keys, ascending=[True] * len(sort_keys))
+            # 정렬 및 출력
+            final_df = my_df[list(dict.fromkeys(disp_cols))].copy()
+            # 순서 적용
+            final_o = [c for c in st.session_state['col_order'] if c in final_df.columns]
+            final_df = final_df[final_o]
             
-            # 4. 사용자 지정 순서 정렬
-            final_cols = list(dict.fromkeys(display_cols))
-            ordered_final_cols = []
-            for c in st.session_state.get('col_order', []):
-                if c in final_cols: ordered_final_cols.append(c)
-            for c in final_cols:
-                if c not in ordered_final_cols: ordered_final_cols.append(c)
-                    
-            if not ordered_final_cols:
-                st.warning("관리자 화면에서 표시할 항목을 추가해주세요.")
-            else:
-                final_df = my_df[ordered_final_cols].copy()
-                
-                # 5. 세 자리 콤마(,) 포맷팅 및 [0값 빈칸 숨김 처리]
-                for c in final_df.columns:
-                    if '코드' not in c and '연도' not in c:
-                        def format_with_comma_and_hide_zero(val):
-                            try:
-                                if pd.isna(val) or str(val).strip() == "": return ""
-                                clean_val = str(val).replace(',', '')
-                                num = float(clean_val)
-                                
-                                # 0이면 화면에 아예 표시되지 않도록 빈 문자열 반환
-                                if num == 0: return "" 
-                                
-                                if num.is_integer(): return f"{int(num):,}"
-                                return f"{num:,.1f}"
-                            except:
-                                # 문자열인 경우 원본 유지 (하지만 문자 '0'도 삭제)
-                                if str(val).strip() == "0" or str(val).strip() == "0.0": return ""
-                                return val
-                        
-                        final_df[c] = final_df[c].apply(format_with_comma_and_hide_zero)
-                
-                # 6. 완벽한 가운데 정렬 및 다크레드 디자인 적용 (Pandas Styler 활용)
-                def style_dataframe(df):
-                    styler = df.style
-                    
-                    # (1) 모든 셀 내용 완벽한 가운데 정렬 적용 (숫자 포함)
-                    styler = styler.set_properties(**{'text-align': 'center !important'})
-                    
-                    # (2) 부족금액 폰트색상 '다크레드' 적용
-                    shortfall_cols = [c for c in df.columns if '부족금액' in c]
-                    if shortfall_cols:
-                        for sc in shortfall_cols:
-                            styler = styler.map(lambda x: 'color: rgb(128, 0, 0); font-weight: bold;' if pd.notna(x) and x != "" else '', subset=[sc])
-                    
-                    # (3) 표 헤더 짙은 회색 배경 + 흰색 글씨 + 가운데 정렬 적용
-                    styler = styler.set_table_styles([
-                        {'selector': 'th', 'props': [('background-color', '#4e5968'), ('color', 'white'), ('font-weight', 'bold'), ('text-align', 'center !important')]},
-                        {'selector': 'thead th', 'props': [('background-color', '#4e5968'), ('color', 'white'), ('text-align', 'center !important')]},
-                        {'selector': 'td', 'props': [('text-align', 'center !important')]}
-                    ])
-                    return styler
+            # 0 숨김 및 천단위 콤마
+            def fmt(v):
+                try:
+                    num = float(str(v).replace(',', ''))
+                    if num == 0: return ""
+                    return f"{int(num):,}" if num.is_integer() else f"{num:,.1f}"
+                except: return "" if str(v) == "0" else v
+            
+            for c in final_df.columns:
+                if '코드' not in c and '연도' not in c: final_df[c] = final_df[c].apply(fmt)
 
-                st.dataframe(
-                    style_dataframe(final_df), 
-                    use_container_width=True, 
-                    hide_index=True
-                )
+            # 스타일 적용 (완벽한 가운데 정렬)
+            st.dataframe(
+                final_df.style.set_properties(**{'text-align': 'center'})
+                .set_table_styles([
+                    {'selector': 'th', 'props': [('background-color', '#4e5968'), ('color', 'white'), ('text-align', 'center')]},
+                    {'selector': 'td', 'props': [('text-align', 'center')]}
+                ])
+                .map(lambda x: 'color: rgb(128, 0, 0); font-weight: bold;' if '목표' in str(x) or (isinstance(x, str) and len(x)>0 and x[0].isdigit()) else '', 
+                     subset=[c for c in final_df.columns if '부족금액' in c]),
+                use_container_width=True, hide_index=True
+            )
