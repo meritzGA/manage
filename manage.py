@@ -128,6 +128,8 @@ def load_data_and_config():
                 st.session_state['admin_goals'] = data.get('admin_goals', {})
                 st.session_state['admin_categories'] = data.get('admin_categories', [])
                 st.session_state['col_order'] = data.get('col_order', [])
+                st.session_state['merge_key1_col'] = data.get('merge_key1_col', '')
+                st.session_state['merge_key2_col'] = data.get('merge_key2_col', '')
         except:
             pass 
 
@@ -139,7 +141,9 @@ def save_data_and_config():
         'admin_cols': st.session_state.get('admin_cols', []),
         'admin_goals': st.session_state.get('admin_goals', {}),
         'admin_categories': st.session_state.get('admin_categories', []),
-        'col_order': st.session_state.get('col_order', [])
+        'col_order': st.session_state.get('col_order', []),
+        'merge_key1_col': st.session_state.get('merge_key1_col', ''),
+        'merge_key2_col': st.session_state.get('merge_key2_col', ''),
     }
     with open(CONFIG_FILE, 'wb') as f:
         pickle.dump(data, f)
@@ -315,55 +319,98 @@ if menu == "관리자 화면 (설정)":
     
     st.header("1. 데이터 파일 업로드 및 관리")
     if not st.session_state['df_merged'].empty:
-        st.success(f"✅ 현재 **{len(st.session_state['df_merged'])}행**의 데이터가 저장되어 운영 중입니다.")
-        if st.button("🗑️ 기존 파일 데이터 삭제 (새 파일 업로드 시)"):
-            st.session_state['df_merged'] = pd.DataFrame()
-            save_data_and_config()
-            st.rerun()
-    else:
-        col_file1, col_file2 = st.columns(2)
-        with col_file1: file1 = st.file_uploader("첫 번째 파일 업로드", type=['csv', 'xlsx'])
-        with col_file2: file2 = st.file_uploader("두 번째 파일 업로드", type=['csv', 'xlsx'])
+        st.success(f"✅ 현재 **{len(st.session_state['df_merged'])}행**의 데이터가 운영 중입니다. 새 파일을 업로드하면 데이터만 교체됩니다 (설정 유지).")
+    
+    col_file1, col_file2 = st.columns(2)
+    with col_file1: file1 = st.file_uploader("첫 번째 파일 업로드", type=['csv', 'xlsx'])
+    with col_file2: file2 = st.file_uploader("두 번째 파일 업로드", type=['csv', 'xlsx'])
+        
+    if file1 is not None and file2 is not None:
+        try:
+            with st.spinner("파일을 읽고 있습니다..."):
+                df1 = load_file_data(file1.getvalue(), file1.name)
+                df2 = load_file_data(file2.getvalue(), file2.name)
+            cols1 = df1.columns.tolist()
+            cols2 = df2.columns.tolist()
             
-        if file1 is not None and file2 is not None:
-            try:
-                with st.spinner("파일을 읽고 있습니다..."):
-                    df1 = load_file_data(file1.getvalue(), file1.name)
-                    df2 = load_file_data(file2.getvalue(), file2.name)
-                cols1 = df1.columns.tolist()
-                cols2 = df2.columns.tolist()
-                with st.form("merge_form"):
-                    col_key1, col_key2 = st.columns(2)
-                    with col_key1: key1 = st.selectbox("첫 번째 파일의 [설계사 코드] 열 선택", cols1)
-                    with col_key2: key2 = st.selectbox("두 번째 파일의 [설계사 코드] 열 선택", cols2)
-                    
-                    submit_merge = st.form_submit_button("데이터 병합 및 시스템에 저장")
-                    if submit_merge:
-                        with st.spinner("데이터를 병합하고 저장 중입니다..."):
-                            df1['merge_key1'] = df1[key1].apply(clean_key)
-                            df2['merge_key2'] = df2[key2].apply(clean_key)
-                            df_merged = pd.merge(df1, df2, left_on='merge_key1', right_on='merge_key2', how='outer', suffixes=('_파일1', '_파일2'))
-                            
-                            # ✅ suffix로 분리된 동일 열을 자동 통합 (coalesce)
-                            cols_1 = [c for c in df_merged.columns if c.endswith('_파일1')]
-                            for c1 in cols_1:
-                                base = c1.replace('_파일1', '')
-                                c2 = base + '_파일2'
-                                if c2 in df_merged.columns:
-                                    # 파일1 값 우선, 없으면 파일2 값 사용
-                                    df_merged[base] = df_merged[c1].combine_first(df_merged[c2])
-                                    df_merged.drop(columns=[c1, c2], inplace=True)
-                            
-                            st.session_state['df_merged'] = df_merged
-                            save_data_and_config()
-                            st.success(f"데이터 병합 완료! 총 {len(df_merged)}행의 데이터가 안전하게 저장되었습니다.")
-                            st.rerun()
-            except Exception as e:
-                st.error(f"파일을 읽는 중 오류가 발생했습니다: {e}")
+            # 이전에 저장된 merge key가 있으면 자동 선택
+            prev_key1 = st.session_state.get('merge_key1_col', '')
+            prev_key2 = st.session_state.get('merge_key2_col', '')
+            idx1 = cols1.index(prev_key1) if prev_key1 in cols1 else 0
+            idx2 = cols2.index(prev_key2) if prev_key2 in cols2 else 0
+            
+            with st.form("merge_form"):
+                col_key1, col_key2 = st.columns(2)
+                with col_key1: key1 = st.selectbox("첫 번째 파일의 [설계사 코드] 열 선택", cols1, index=idx1)
+                with col_key2: key2 = st.selectbox("두 번째 파일의 [설계사 코드] 열 선택", cols2, index=idx2)
+                
+                submit_merge = st.form_submit_button("🔄 데이터 병합 및 교체 (설정 유지)")
+                if submit_merge:
+                    with st.spinner("데이터를 병합하고 저장 중입니다..."):
+                        df1['merge_key1'] = df1[key1].apply(clean_key)
+                        df2['merge_key2'] = df2[key2].apply(clean_key)
+                        df_merged = pd.merge(df1, df2, left_on='merge_key1', right_on='merge_key2', how='outer', suffixes=('_파일1', '_파일2'))
+                        
+                        # ✅ suffix로 분리된 동일 열을 자동 통합 (coalesce)
+                        cols_1 = [c for c in df_merged.columns if c.endswith('_파일1')]
+                        for c1 in cols_1:
+                            base = c1.replace('_파일1', '')
+                            c2 = base + '_파일2'
+                            if c2 in df_merged.columns:
+                                df_merged[base] = df_merged[c1].combine_first(df_merged[c2])
+                                df_merged.drop(columns=[c1, c2], inplace=True)
+                        
+                        # merge key 선택값 저장 (다음 업로드 시 자동 선택)
+                        st.session_state['merge_key1_col'] = key1
+                        st.session_state['merge_key2_col'] = key2
+                        st.session_state['df_merged'] = df_merged
+                        
+                        # ✅ 기존 설정 검증 - 사라진 열이 있는 항목만 제거, 나머지 유지
+                        new_cols = [c for c in df_merged.columns if c not in ['merge_key1', 'merge_key2']]
+                        
+                        # manager_col / manager_name_col 검증
+                        if st.session_state['manager_col'] not in new_cols:
+                            st.session_state['manager_col'] = ""
+                        if st.session_state['manager_name_col'] not in new_cols:
+                            st.session_state['manager_name_col'] = ""
+                        
+                        # admin_cols 검증 - 열이 살아있는 항목만 유지
+                        st.session_state['admin_cols'] = [
+                            item for item in st.session_state['admin_cols']
+                            if item['col'] in new_cols
+                        ]
+                        
+                        # admin_goals 검증
+                        st.session_state['admin_goals'] = {
+                            k: v for k, v in st.session_state['admin_goals'].items()
+                            if k in new_cols
+                        }
+                        
+                        # admin_categories 검증 - 모든 조건 열이 존재하는 것만 유지
+                        valid_cats = []
+                        for cat in st.session_state['admin_categories']:
+                            cond_list = cat.get('conditions', [])
+                            if all(c.get('col', '') in new_cols for c in cond_list):
+                                valid_cats.append(cat)
+                        st.session_state['admin_categories'] = valid_cats
+                        
+                        save_data_and_config()
+                        st.success(f"✅ 데이터 교체 완료! 총 {len(df_merged)}행 | 기존 설정이 유지되었습니다.")
+                        st.rerun()
+        except Exception as e:
+            st.error(f"파일을 읽는 중 오류가 발생했습니다: {e}")
 
     st.divider()
-
+    
+    # ✅ 설정 검증 경고 표시 (열이 사라진 경우)
     if not st.session_state['df_merged'].empty:
+        warnings = []
+        if not st.session_state['manager_col']:
+            warnings.append("⚠️ **매니저 코드 열**이 설정되지 않았습니다. 아래 2번에서 다시 선택해주세요.")
+        if not st.session_state['manager_name_col']:
+            warnings.append("⚠️ **매니저 이름 열**이 설정되지 않았습니다. 아래 2번에서 다시 선택해주세요.")
+        for w in warnings:
+            st.warning(w)
         df = st.session_state['df_merged']
         available_columns = [c for c in df.columns if c not in ['merge_key1', 'merge_key2']]
         
@@ -517,7 +564,7 @@ if menu == "관리자 화면 (설정)":
             st.write("---")
             
     else:
-        st.info("👆 먼저 위에서 두 파일을 업로드하고 [데이터 병합 및 시스템에 저장]을 눌러주세요.")
+        st.info("👆 먼저 위에서 두 파일을 업로드하고 [데이터 병합 및 교체]를 눌러주세요.")
 
 # ==========================================
 # 5. 매니저 화면 (Manager View)
