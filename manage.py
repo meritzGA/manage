@@ -15,12 +15,10 @@ CONFIG_FILE = "app_config.pkl"
 # ==========================================
 st.markdown("""
 <style>
-/* 폰트 및 전체 느낌 부드럽게 */
 @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
 html, body, [class*="css"] {
     font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, 'Helvetica Neue', 'Segoe UI', 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif;
 }
-/* 매니저 대시보드 상단 카드 디자인 */
 .toss-header {
     background-color: #f2f4f6;
     padding: 32px 40px;
@@ -36,9 +34,9 @@ html, body, [class*="css"] {
     letter-spacing: -0.5px;
 }
 .toss-subtitle {
-    color: #8b95a1;
-    font-size: 22px;
-    font-weight: 600;
+    color: #3182f6; /* 토스 블루 컬러로 코드 강조 */
+    font-size: 24px;
+    font-weight: 700;
     margin-left: 10px;
 }
 .toss-desc {
@@ -47,7 +45,6 @@ html, body, [class*="css"] {
     margin: 12px 0 0 0;
     font-weight: 500;
 }
-/* 데이터프레임 모서리 둥글게 */
 [data-testid="stDataFrame"] {
     border-radius: 16px;
     overflow: hidden;
@@ -141,7 +138,6 @@ if menu == "관리자 화면 (설정)":
     st.title("⚙️ 관리자 설정 화면")
     
     st.header("1. 데이터 파일 업로드 및 관리")
-    
     if not st.session_state['df_merged'].empty:
         st.success(f"✅ 현재 **{len(st.session_state['df_merged'])}행**의 데이터가 저장되어 운영 중입니다.")
         if st.button("🗑️ 기존 파일 데이터 삭제 (새 파일 업로드 시)"):
@@ -150,10 +146,8 @@ if menu == "관리자 화면 (설정)":
             st.rerun()
     else:
         col_file1, col_file2 = st.columns(2)
-        with col_file1:
-            file1 = st.file_uploader("첫 번째 파일 업로드", type=['csv', 'xlsx'])
-        with col_file2:
-            file2 = st.file_uploader("두 번째 파일 업로드", type=['csv', 'xlsx'])
+        with col_file1: file1 = st.file_uploader("첫 번째 파일 업로드", type=['csv', 'xlsx'])
+        with col_file2: file2 = st.file_uploader("두 번째 파일 업로드", type=['csv', 'xlsx'])
             
         if file1 is not None and file2 is not None:
             try:
@@ -197,8 +191,7 @@ if menu == "관리자 화면 (설정)":
             idx_name = available_columns.index(st.session_state['manager_name_col']) if st.session_state['manager_name_col'] in available_columns else 0
             manager_name_col = st.selectbox("👤 화면 상단 [매니저 이름] 표시 열", available_columns, index=idx_name)
         with col_m3:
-            st.write("")
-            st.write("")
+            st.write(""); st.write("")
             if st.button("저장", key="btn_save_manager"):
                 st.session_state['manager_col'] = manager_col
                 st.session_state['manager_name_col'] = manager_name_col
@@ -209,16 +202,22 @@ if menu == "관리자 화면 (설정)":
 
         # ========================================
         st.header("3. 표시할 데이터 항목 및 필터 추가")
-        c1, c2, c3, c4 = st.columns([3, 2, 3, 2])
-        with c1: sel_col = st.selectbox("추가할 항목 선택", available_columns, key="sec3_col")
-        with c2: col_type = st.radio("데이터 타입", ["텍스트", "숫자"], horizontal=True, key="sec3_type")
-        with c3: condition = st.text_input("산식 (예: > 0)", key="sec3_cond")
-        with c4:
-            st.write("")
-            st.write("")
-            if st.button("➕ 항목 추가", key="btn_add_col"):
+        st.markdown("항목을 선택하고 **[표시할 명칭]**을 입력하면 화면에 입력한 이름으로 예쁘게 나옵니다.")
+        
+        c1, c2, c3, c4, c5 = st.columns([3, 2, 2, 2, 1])
+        with c1: sel_col = st.selectbox("항목 선택", available_columns, key="sec3_col")
+        with c2: display_name = st.text_input("표시 명칭 (선택)", placeholder="미입력시 원본유지", key="sec3_disp")
+        with c3: col_type = st.radio("데이터 타입", ["텍스트", "숫자"], horizontal=True, key="sec3_type")
+        with c4: condition = st.text_input("산식 (예: > 0)", key="sec3_cond")
+        with c5:
+            st.write(""); st.write("")
+            if st.button("➕ 추가", key="btn_add_col"):
+                final_display_name = display_name.strip() if display_name.strip() else sel_col
                 st.session_state['admin_cols'].append({
-                    "col": sel_col, "type": col_type, "condition": condition if col_type == "숫자" else ""
+                    "col": sel_col, 
+                    "display_name": final_display_name,
+                    "type": col_type, 
+                    "condition": condition if col_type == "숫자" else ""
                 })
                 save_data_and_config()
                 st.rerun()
@@ -226,7 +225,9 @@ if menu == "관리자 화면 (설정)":
         if st.session_state['admin_cols']:
             for i, item in enumerate(st.session_state['admin_cols']):
                 row_c1, row_c2 = st.columns([8, 2])
-                with row_c1: st.markdown(f"- **{item['col']}** ({item['type']}) | 조건: `{item['condition']}`")
+                with row_c1:
+                    disp = item.get('display_name', item['col'])
+                    st.markdown(f"- 📄 원본: `{item['col']}` ➡️ **화면 표시: [{disp}]** ({item['type']}) | 조건: `{item['condition']}`")
                 with row_c2:
                     if st.button("❌ 삭제", key=f"del_col_{i}"):
                         st.session_state['admin_cols'].pop(i)
@@ -241,8 +242,7 @@ if menu == "관리자 화면 (설정)":
         with c1: goal_col = st.selectbox("목표 구간을 적용할 항목", available_columns, key="sec4_col")
         with c2: goal_tiers = st.text_input("구간 금액 입력 (예: 100000, 200000)", key="sec4_tiers")
         with c3:
-            st.write("")
-            st.write("")
+            st.write(""); st.write("")
             if st.button("➕ 구간 추가", key="btn_add_goal"):
                 if goal_tiers:
                     tiers_list = [float(x.strip()) for x in goal_tiers.split(",") if x.strip().isdigit()]
@@ -263,7 +263,7 @@ if menu == "관리자 화면 (설정)":
         st.divider()
 
         # ========================================
-        st.header("5. 맞춤형 분류(태그) 설정 (3개 조건 조합)")
+        st.header("5. 맞춤형 분류(태그) 설정")
         with st.form("add_cat_form"):
             col1, col2 = st.columns(2)
             with col1:
@@ -307,11 +307,13 @@ if menu == "관리자 화면 (설정)":
         st.header("6. 📋 화면 표시 순서 커스텀 설정")
         st.markdown("매니저 화면에 출력될 열의 순서를 자유롭게 배치하세요. **(박스 안의 항목들을 마우스로 드래그해서 순서를 바꾸거나, `X`를 눌러 지우고 다시 순서대로 클릭하시면 됩니다.)**")
         
-        # 조합될 모든 예상 컬럼명 수집
+        # 현재 설정된 표시명 기준 컬럼 수집
         expected_cols = []
         if st.session_state['admin_categories']: expected_cols.append("맞춤분류")
-        for item in st.session_state['admin_cols']: expected_cols.append(item['col'])
-        for g_col in st.session_state['admin_goals'].keys(): expected_cols.extend([f"{g_col}_다음목표", f"{g_col}_부족금액"])
+        for item in st.session_state['admin_cols']: 
+            expected_cols.append(item.get('display_name', item['col']))
+        for g_col in st.session_state['admin_goals'].keys(): 
+            expected_cols.extend([f"{g_col} 다음목표", f"{g_col} 부족금액"])
             
         current_order = st.session_state.get('col_order', [])
         valid_order = [c for c in current_order if c in expected_cols]
@@ -369,17 +371,25 @@ elif menu == "매니저 화면 (로그인)":
             # 2. 데이터 처리
             display_cols = []
             
+            # (1) 일반 항목 (사용자 지정 명칭 적용)
             for item in st.session_state['admin_cols']:
-                col_name = item['col']
-                display_cols.append(col_name)
+                orig_col = item['col']
+                disp_col = item.get('display_name', orig_col)
+                
+                # 숫자 필터 먼저 적용
                 if item['type'] == '숫자' and item['condition']:
                     try:
-                        my_df[col_name] = pd.to_numeric(my_df[col_name], errors='coerce').fillna(0)
-                        mask = my_df.eval(f"`{col_name}` {item['condition']}")
+                        my_df[orig_col] = pd.to_numeric(my_df[orig_col], errors='coerce').fillna(0)
+                        mask = my_df.eval(f"`{orig_col}` {item['condition']}")
                         my_df = my_df[mask]
                     except Exception as e:
                         pass
+                
+                # 원본 열 데이터를 지정된 표시 명칭 열로 복사
+                my_df[disp_col] = my_df[orig_col]
+                display_cols.append(disp_col)
             
+            # (2) 목표 구간 처리
             for g_col, tiers in st.session_state['admin_goals'].items():
                 if g_col in my_df.columns:
                     my_df[g_col] = pd.to_numeric(my_df[g_col], errors='coerce').fillna(0)
@@ -388,10 +398,15 @@ elif menu == "매니저 화면 (로그인)":
                             if val < t:
                                 return pd.Series([f"{t:,.0f} 목표", t - val])
                         return pd.Series(["최고 구간 달성", 0])
-                    my_df[[f'{g_col}_다음목표', f'{g_col}_부족금액']] = my_df[g_col].apply(calc_shortfall)
-                    if f'{g_col}_다음목표' not in display_cols:
-                        display_cols.extend([f'{g_col}_다음목표', f'{g_col}_부족금액'])
+                    
+                    next_target_col = f"{g_col} 다음목표"
+                    shortfall_col = f"{g_col} 부족금액"
+                    
+                    my_df[[next_target_col, shortfall_col]] = my_df[g_col].apply(calc_shortfall)
+                    if next_target_col not in display_cols:
+                        display_cols.extend([next_target_col, shortfall_col])
 
+            # (3) 맞춤분류(태그) 설정
             if st.session_state['admin_categories']:
                 if '맞춤분류' not in my_df.columns:
                     my_df['맞춤분류'] = ""
@@ -414,13 +429,18 @@ elif menu == "매니저 화면 (로그인)":
                 if '맞춤분류' not in display_cols:
                     display_cols.insert(0, '맞춤분류')
             
-            # 3. 데이터 정렬 (맞춤분류 -> 지사명 -> 성명)
+            # 3. 데이터 정렬 (맞춤분류 -> 지사명 -> 성명) - 생성된 화면 표시 이름으로도 검색
             sort_keys = []
             if '맞춤분류' in my_df.columns: sort_keys.append('맞춤분류')
-            ji_cols = [c for c in my_df.columns if '지사명' in c]
+            
+            ji_cols = [c for c in display_cols if '지사명' in c]
+            if not ji_cols: ji_cols = [c for c in my_df.columns if '지사명' in c]
             if ji_cols: sort_keys.append(ji_cols[0])
-            gender_name_cols = [c for c in my_df.columns if '성별' in c or '설계사명' in c or '성명' in c]
+                
+            gender_name_cols = [c for c in display_cols if '성별' in c or '설계사명' in c or '성명' in c or '이름' in c]
+            if not gender_name_cols: gender_name_cols = [c for c in my_df.columns if '성별' in c or '설계사명' in c or '성명' in c]
             if gender_name_cols: sort_keys.append(gender_name_cols[0])
+                
             if sort_keys:
                 my_df = my_df.sort_values(by=sort_keys, ascending=[True] * len(sort_keys))
             
@@ -443,7 +463,7 @@ elif menu == "매니저 화면 (로그인)":
                 # 5. 세 자리 콤마(,) 서식 적용 및 테이블 표시
                 col_configs = {}
                 for c in final_df.columns:
-                    # 해당 컬럼의 데이터가 숫자 형식일 경우 자동으로 콤마 포맷 지정
+                    # 해당 컬럼의 데이터가 숫자 형식이면 콤마 포맷팅 자동 적용
                     if pd.api.types.is_numeric_dtype(final_df[c]):
                         col_configs[c] = st.column_config.NumberColumn(format="{:,}")
                 
