@@ -657,16 +657,24 @@ if menu == "관리자 화면 (설정)":
     if has_data():
         warnings = []
         if not st.session_state['manager_col']:
-            warnings.append("⚠️ **매니저 코드 열**이 설정되지 않았습니다. 아래 2번에서 다시 선택해주세요.")
+            warnings.append("⚠️ **매니저 코드 열**이 설정되지 않았습니다. 아래 3번에서 다시 선택해주세요.")
         if not st.session_state['manager_name_col']:
-            warnings.append("⚠️ **매니저 이름 열**이 설정되지 않았습니다. 아래 2번에서 다시 선택해주세요.")
+            warnings.append("⚠️ **매니저 이름 열**이 설정되지 않았습니다. 아래 3번에서 다시 선택해주세요.")
         for w in warnings:
             st.warning(w)
         df = st.session_state['df_merged']
         available_columns = [c for c in df.columns if c not in ['merge_key1', 'merge_key2', '_unified_search_key']]
         
         # ========================================
-        st.header("2. 매니저 로그인 및 이름 표시 열 설정")
+        st.header("2. 📅 데이터 기준일 설정")
+        current_date = st.session_state.get('data_date', '')
+        new_date = st.text_input("조회 화면에 표시할 기준일 (예: 2025.02.24)", value=current_date, key="sec2_date")
+        if new_date != current_date:
+            st.session_state['data_date'] = new_date
+            save_data_and_config()
+        
+        # ========================================
+        st.header("3. 매니저 로그인 및 이름 표시 열 설정")
         st.caption("두 파일의 매니저 코드 열 이름이 다른 경우, 보조 열을 추가 선택하면 양쪽 모두 검색됩니다.")
         col_m1, col_m2 = st.columns(2)
         with col_m1:
@@ -694,7 +702,7 @@ if menu == "관리자 화면 (설정)":
         st.divider()
 
         # ========================================
-        st.header("3. 표시할 데이터 항목 및 필터 추가")
+        st.header("4. 표시할 데이터 항목 및 필터 추가")
         c1, c2, c3 = st.columns([3, 3, 3])
         with c1: sel_col = st.selectbox("항목 선택 (주 열)", available_columns, key="sec3_col")
         with c2: 
@@ -732,7 +740,7 @@ if menu == "관리자 화면 (설정)":
         st.divider()
 
         # ========================================
-        st.header("4. 목표 구간 설정 (기준열 연동 가능)")
+        st.header("5. 목표 구간 설정 (기준열 연동 가능)")
         st.caption("기준 열(A)을 설정하면, A값이 B 목표의 상한선이 됩니다. (예: A=40만이면 B의 최대 목표도 40만)")
         c1, c2 = st.columns(2)
         with c1: 
@@ -782,7 +790,7 @@ if menu == "관리자 화면 (설정)":
         st.divider()
 
         # ========================================
-        st.header("5. 맞춤형 분류(태그) 설정 (3개 조건 조합)")
+        st.header("6. 맞춤형 분류(태그) 설정 (3개 조건 조합)")
         with st.form("add_cat_form"):
             col1, col2 = st.columns(2)
             with col1:
@@ -821,7 +829,7 @@ if menu == "관리자 화면 (설정)":
         st.divider()
 
         # ========================================
-        st.header("6. 📋 화면 표시 순서 커스텀 설정")
+        st.header("7. 📋 화면 표시 순서 커스텀 설정")
         expected_cols = []
         if st.session_state['admin_categories']: expected_cols.append("맞춤분류")
         for item in st.session_state['admin_cols']: expected_cols.append(item.get('display_name', item['col']))
@@ -858,7 +866,7 @@ if menu == "관리자 화면 (설정)":
         st.divider()
 
         # ========================================
-        st.header("7. 📊 항목 그룹 헤더 설정")
+        st.header("8. 📊 항목 그룹 헤더 설정")
         st.caption("여러 항목을 묶어서 상단에 그룹명을 표시합니다. (예: A, B, C 항목 → '2~3월 시책 현황')")
         
         # 표시 순서에 등록된 항목 목록을 선택지로 사용
@@ -886,7 +894,7 @@ if menu == "관리자 화면 (설정)":
                             save_data_and_config()
                             st.rerun()
         else:
-            st.info("먼저 6번에서 표시 순서를 설정해주세요.")
+            st.info("먼저 7번에서 표시 순서를 설정해주세요.")
             
     else:
         st.info("👆 먼저 위에서 두 파일을 업로드하고 [데이터 병합 및 교체]를 눌러주세요.")
