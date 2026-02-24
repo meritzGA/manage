@@ -668,44 +668,47 @@ def render_html_table(df, col_groups=None):
 # ==========================================
 st.sidebar.title("메뉴")
 menu = st.sidebar.radio("이동할 화면을 선택하세요", ["매니저 화면 (로그인)", "관리자 화면 (설정)"])
-st.sidebar.divider()
-with st.sidebar.expander("💾 설정 백업 / 복원"):
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, 'rb') as f:
-            cfg_bytes = f.read()
-        st.download_button("⬇️ 현재 설정 다운로드", cfg_bytes,
-                         file_name="meritz_config_backup.pkl", mime="application/octet-stream")
-    else:
-        st.caption("저장된 설정이 없습니다.")
-    restore_file = st.file_uploader("⬆️ 백업 파일로 복원", type=['pkl'], key="restore_pkl")
-    if restore_file is not None:
-        if st.button("복원 실행", key="btn_restore"):
-            try:
-                test = pickle.loads(restore_file.getvalue())
-                if isinstance(test, dict):
-                    with open(CONFIG_FILE, 'wb') as f:
-                        f.write(restore_file.getvalue())
-                    _reset_session_state()
-                    load_data_and_config()
-                    st.success("✅ 복원 완료!")
-                    st.rerun()
-                else:
-                    st.error("유효하지 않은 파일입니다.")
-            except Exception as e:
-                st.error(f"복원 실패: {e}")
-with st.sidebar.expander("⚠️ 시스템 초기화 (주의)"):
-    st.caption("모든 설정과 데이터가 삭제됩니다.")
-    confirm = st.text_input("'reset' 입력 후 실행", key="reset_confirm")
-    if st.button("🔄 초기화 실행", disabled=(confirm != "reset")):
-        for fp in [CONFIG_FILE, DATA_FILE]:
-            try:
-                if os.path.exists(fp):
-                    shutil.copy2(fp, fp + ".before_reset")
-                    os.remove(fp)
-            except Exception:
-                pass
-        _reset_session_state()
-        st.rerun()
+
+# 백업/초기화는 관리자 로그인 후에만 표시
+if st.session_state.get('admin_authenticated', False) and menu == "관리자 화면 (설정)":
+    st.sidebar.divider()
+    with st.sidebar.expander("💾 설정 백업 / 복원"):
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, 'rb') as f:
+                cfg_bytes = f.read()
+            st.download_button("⬇️ 현재 설정 다운로드", cfg_bytes,
+                             file_name="meritz_config_backup.pkl", mime="application/octet-stream")
+        else:
+            st.caption("저장된 설정이 없습니다.")
+        restore_file = st.file_uploader("⬆️ 백업 파일로 복원", type=['pkl'], key="restore_pkl")
+        if restore_file is not None:
+            if st.button("복원 실행", key="btn_restore"):
+                try:
+                    test = pickle.loads(restore_file.getvalue())
+                    if isinstance(test, dict):
+                        with open(CONFIG_FILE, 'wb') as f:
+                            f.write(restore_file.getvalue())
+                        _reset_session_state()
+                        load_data_and_config()
+                        st.success("✅ 복원 완료!")
+                        st.rerun()
+                    else:
+                        st.error("유효하지 않은 파일입니다.")
+                except Exception as e:
+                    st.error(f"복원 실패: {e}")
+    with st.sidebar.expander("⚠️ 시스템 초기화 (주의)"):
+        st.caption("모든 설정과 데이터가 삭제됩니다.")
+        confirm = st.text_input("'reset' 입력 후 실행", key="reset_confirm")
+        if st.button("🔄 초기화 실행", disabled=(confirm != "reset")):
+            for fp in [CONFIG_FILE, DATA_FILE]:
+                try:
+                    if os.path.exists(fp):
+                        shutil.copy2(fp, fp + ".before_reset")
+                        os.remove(fp)
+                except Exception:
+                    pass
+            _reset_session_state()
+            st.rerun()
 
 # ==========================================
 # 4. 관리자 화면 (Admin View)
