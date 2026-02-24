@@ -109,6 +109,16 @@ html, body, [class*="css"] {
     color: rgb(128, 0, 0);
     font-weight: 700;
 }
+/* Streamlit 메인 영역 패딩 최소화 → 화면 폭 최대 활용 */
+.block-container {
+    padding-left: 1.5rem !important;
+    padding-right: 1.5rem !important;
+    max-width: 100% !important;
+}
+/* iframe(테이블) 전체 폭 사용 */
+iframe {
+    width: 100% !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -215,31 +225,48 @@ def load_file_data(file_bytes, file_name):
 # ★ HTML 테이블 렌더링 함수
 # ==========================================
 def render_html_table(df):
-    """DataFrame을 짙은회색 헤더 + 가운데 정렬 + 헤더 클릭 정렬 HTML 테이블로 변환"""
+    """DataFrame을 짙은회색 헤더 + 가운데 정렬 + 헤더 클릭 정렬 + 반응형 HTML 테이블로 변환"""
     import uuid
     table_id = f"perf_{uuid.uuid4().hex[:8]}"
+    num_cols = len(df.columns)
     shortfall_cols = set(c for c in df.columns if '부족금액' in c)
 
-    # iframe 내부에서 독립 렌더링되므로 CSS를 직접 포함
+    # iframe 내부에서 독립 렌더링 — 반응형 CSS 포함
     html = f"""
     <style>
     @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
-    body {{ margin: 0; padding: 0; font-family: 'Pretendard', -apple-system, 'Noto Sans KR', sans-serif; }}
-    .perf-table-wrap {{ width: 100%; overflow-x: auto; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.08); }}
-    .perf-table {{ width: 100%; border-collapse: collapse; font-size: 14px; white-space: nowrap; }}
+    * {{ box-sizing: border-box; }}
+    html, body {{ margin: 0; padding: 0; font-family: 'Pretendard', -apple-system, 'Noto Sans KR', sans-serif; overflow: hidden; }}
+    .perf-table-wrap {{ width: 100%; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.08); overflow-x: auto; }}
+    .perf-table {{ width: 100%; border-collapse: collapse; white-space: nowrap; table-layout: auto; }}
+    
+    /* 열 개수에 따른 기본 폰트 크기 자동 조절 */
+    .perf-table {{ font-size: {max(11, 15 - num_cols // 3)}px; }}
+    
     .perf-table thead th {{
         background-color: #4e5968; color: #ffffff; font-weight: 700;
-        text-align: center; padding: 10px 14px; border: 1px solid #3d4654;
+        text-align: center; padding: 8px 6px; border: 1px solid #3d4654;
         position: sticky; top: 0; z-index: 1;
         cursor: pointer; user-select: none;
+        white-space: nowrap;
     }}
     .perf-table thead th:hover {{ background-color: #3d4654; }}
-    .perf-table thead th .sort-arrow {{ margin-left: 4px; font-size: 11px; opacity: 0.5; }}
+    .perf-table thead th .sort-arrow {{ margin-left: 3px; font-size: 10px; opacity: 0.5; }}
     .perf-table thead th .sort-arrow.active {{ opacity: 1; }}
-    .perf-table tbody td {{ text-align: center; padding: 8px 12px; border: 1px solid #e5e8eb; }}
+    .perf-table tbody td {{ text-align: center; padding: 6px 6px; border: 1px solid #e5e8eb; white-space: nowrap; }}
     .perf-table tbody tr:nth-child(even) {{ background-color: #f7f8fa; }}
     .perf-table tbody tr:hover {{ background-color: #eef1f6; }}
     .shortfall-cell {{ color: rgb(128, 0, 0); font-weight: 700; }}
+    
+    /* 반응형: 화면 폭에 따라 자동 축소 */
+    @media (max-width: 1200px) {{
+        .perf-table {{ font-size: {max(10, 13 - num_cols // 3)}px; }}
+        .perf-table thead th, .perf-table tbody td {{ padding: 5px 4px; }}
+    }}
+    @media (max-width: 768px) {{
+        .perf-table {{ font-size: {max(9, 11 - num_cols // 4)}px; }}
+        .perf-table thead th, .perf-table tbody td {{ padding: 4px 3px; }}
+    }}
     </style>
     """
 
@@ -260,9 +287,22 @@ def render_html_table(df):
         html += '</tr>'
     html += '</tbody></table></div>'
 
-    # JavaScript: 헤더 클릭 시 오름차순/내림차순 토글 정렬
+    # JavaScript: 정렬 + iframe 자동 높이 조절
     html += f"""
     <script>
+    // ★ iframe 높이를 내용에 맞게 자동 조절
+    function autoResize() {{
+        var body = document.body;
+        var html_el = document.documentElement;
+        var height = Math.max(body.scrollHeight, body.offsetHeight, html_el.scrollHeight, html_el.offsetHeight);
+        if (window.frameElement) {{
+            window.frameElement.style.height = height + 'px';
+        }}
+    }}
+    window.addEventListener('load', autoResize);
+    window.addEventListener('resize', autoResize);
+
+    // 정렬 기능
     var sortState = {{}};
     function sortTable(th) {{
         var table = document.getElementById("{table_id}");
@@ -302,6 +342,9 @@ def render_html_table(df):
                 arrow.className = "sort-arrow";
             }}
         }});
+
+        // 정렬 후 높이 재계산
+        setTimeout(autoResize, 50);
     }}
     </script>
     """
@@ -769,9 +812,9 @@ elif menu == "매니저 화면 (로그인)":
                         
                         final_df[c] = final_df[c].apply(format_with_comma_and_hide_zero)
                 
-                # 6. ★ HTML 테이블로 렌더링 (짙은 회색 헤더 + 흰색 글씨 + 가운데 정렬)
+                # 6. ★ HTML 테이블로 렌더링 (반응형 + 자동 높이 조절)
                 import streamlit.components.v1 as components
                 table_html = render_html_table(final_df)
-                # 행 수 기반 높이 자동 계산 (헤더 45px + 행당 38px + 여유 20px)
-                table_height = min(45 + len(final_df) * 38 + 20, 2000)
-                components.html(table_html, height=table_height, scrolling=True)
+                # 초기 높이를 넉넉하게 잡고, JS가 실제 내용에 맞춰 자동 조절
+                initial_height = min(45 + len(final_df) * 36 + 50, 10000)
+                components.html(table_html, height=initial_height, scrolling=False)
