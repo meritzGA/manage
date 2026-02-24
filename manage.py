@@ -1,10 +1,12 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import re
 import io
 import os
 import pickle
+import uuid
 
 st.set_page_config(page_title="지원매니저별 실적 관리 시스템", layout="wide")
 
@@ -131,34 +133,48 @@ def load_data_and_config():
         try:
             with open(CONFIG_FILE, 'rb') as f:
                 data = pickle.load(f)
-                st.session_state['df_merged'] = data.get('df_merged', pd.DataFrame())
-                st.session_state['manager_col'] = data.get('manager_col', "")
-                st.session_state['manager_name_col'] = data.get('manager_name_col', "")
-                st.session_state['manager_col2'] = data.get('manager_col2', "")
-                st.session_state['admin_cols'] = data.get('admin_cols', [])
-                st.session_state['admin_goals'] = data.get('admin_goals', {})
-                st.session_state['admin_categories'] = data.get('admin_categories', [])
-                st.session_state['col_order'] = data.get('col_order', [])
-                st.session_state['merge_key1_col'] = data.get('merge_key1_col', '')
-                st.session_state['merge_key2_col'] = data.get('merge_key2_col', '')
-                
-                # ✅ 기존 admin_cols에 fallback_col 키가 없으면 추가
-                for item in st.session_state['admin_cols']:
-                    if 'fallback_col' not in item:
-                        item['fallback_col'] = ''
+            if not isinstance(data, dict):
+                raise ValueError("Invalid config format")
+            
+            df = data.get('df_merged', pd.DataFrame())
+            st.session_state['df_merged'] = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+            st.session_state['manager_col'] = str(data.get('manager_col', ""))
+            st.session_state['manager_name_col'] = str(data.get('manager_name_col', ""))
+            st.session_state['manager_col2'] = str(data.get('manager_col2', ""))
+            st.session_state['admin_cols'] = data.get('admin_cols', []) if isinstance(data.get('admin_cols'), list) else []
+            st.session_state['admin_goals'] = data.get('admin_goals', {}) if isinstance(data.get('admin_goals'), dict) else {}
+            st.session_state['admin_categories'] = data.get('admin_categories', []) if isinstance(data.get('admin_categories'), list) else []
+            st.session_state['col_order'] = data.get('col_order', []) if isinstance(data.get('col_order'), list) else []
+            st.session_state['merge_key1_col'] = str(data.get('merge_key1_col', ''))
+            st.session_state['merge_key2_col'] = str(data.get('merge_key2_col', ''))
+            
+            # 기존 admin_cols에 fallback_col 키가 없으면 추가
+            for item in st.session_state['admin_cols']:
+                if 'fallback_col' not in item:
+                    item['fallback_col'] = ''
         except Exception:
-            # pkl 파일 손상 시 삭제 후 초기화
-            os.remove(CONFIG_FILE)
-            st.session_state['df_merged'] = pd.DataFrame()
-            st.session_state['manager_col'] = ""
-            st.session_state['manager_name_col'] = ""
-            st.session_state['manager_col2'] = ""
-            st.session_state['admin_cols'] = []
-            st.session_state['admin_goals'] = {}
-            st.session_state['admin_categories'] = []
-            st.session_state['col_order'] = []
-            st.session_state['merge_key1_col'] = ''
-            st.session_state['merge_key2_col'] = ''
+            try:
+                os.remove(CONFIG_FILE)
+            except Exception:
+                pass
+            _reset_session_state()
+
+def _reset_session_state():
+    st.session_state['df_merged'] = pd.DataFrame()
+    st.session_state['manager_col'] = ""
+    st.session_state['manager_name_col'] = ""
+    st.session_state['manager_col2'] = ""
+    st.session_state['admin_cols'] = []
+    st.session_state['admin_goals'] = {}
+    st.session_state['admin_categories'] = []
+    st.session_state['col_order'] = []
+    st.session_state['merge_key1_col'] = ''
+    st.session_state['merge_key2_col'] = ''
+
+def has_data():
+    """df_merged가 유효한 DataFrame이고 비어있지 않은지 확인"""
+    df = st.session_state.get('df_merged', None)
+    return isinstance(df, pd.DataFrame) and not df.empty
 
 def save_data_and_config():
     data = {
@@ -177,16 +193,7 @@ def save_data_and_config():
         pickle.dump(data, f)
 
 if 'df_merged' not in st.session_state:
-    st.session_state['df_merged'] = pd.DataFrame()
-    st.session_state['manager_col'] = ""
-    st.session_state['manager_name_col'] = ""
-    st.session_state['manager_col2'] = ""
-    st.session_state['admin_cols'] = []
-    st.session_state['admin_goals'] = {}
-    st.session_state['admin_categories'] = []
-    st.session_state['col_order'] = []
-    st.session_state['merge_key1_col'] = ''
-    st.session_state['merge_key2_col'] = ''
+    _reset_session_state()
     load_data_and_config()
 
 # ==========================================
@@ -244,84 +251,166 @@ def load_file_data(file_bytes, file_name):
 # ★ HTML 테이블 렌더링 함수
 # ==========================================
 def render_html_table(df):
-    """DataFrame을 짙은회색 헤더 + 가운데 정렬 + 헤더 클릭 정렬 + 반응형 HTML 테이블로 변환"""
-    import uuid
+    """DataFrame을 틀 고정(헤더+좌측 열) + 정렬 + 반응형 HTML 테이블로 변환"""
     table_id = f"perf_{uuid.uuid4().hex[:8]}"
     num_cols = len(df.columns)
     shortfall_cols = set(c for c in df.columns if '부족금액' in c)
+    
+    # ✅ 좌측 고정할 열 개수 자동 판단: 이름/분류 관련 열까지 고정
+    freeze_keywords = ['맞춤분류', '설계사', '성명', '이름', '팀장', '대리점']
+    freeze_count = 0
+    for i, col in enumerate(df.columns):
+        if any(kw in col for kw in freeze_keywords):
+            freeze_count = i + 1  # 이 열까지 고정
+    freeze_count = min(freeze_count, 4)  # 최대 4열까지
 
-    # iframe 내부에서 독립 렌더링 — 반응형 CSS 포함
+    base_font = max(11, 15 - num_cols // 3)
+    
     html = f"""
     <style>
     @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
     * {{ box-sizing: border-box; }}
-    html, body {{ margin: 0; padding: 0; font-family: 'Pretendard', -apple-system, 'Noto Sans KR', sans-serif; overflow: hidden; }}
-    .perf-table-wrap {{ width: 100%; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.08); overflow-x: auto; }}
-    .perf-table {{ width: 100%; border-collapse: collapse; white-space: nowrap; table-layout: auto; }}
+    html, body {{ margin: 0; padding: 0; font-family: 'Pretendard', -apple-system, 'Noto Sans KR', sans-serif; }}
     
-    /* 열 개수에 따른 기본 폰트 크기 자동 조절 */
-    .perf-table {{ font-size: {max(11, 15 - num_cols // 3)}px; }}
+    .perf-table-wrap {{
+        width: 100%;
+        max-height: 85vh;
+        overflow: auto;
+        border-radius: 12px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+        position: relative;
+    }}
+    .perf-table {{
+        width: max-content;
+        min-width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        white-space: nowrap;
+        font-size: {base_font}px;
+    }}
     
+    /* 헤더: 상단 고정 */
     .perf-table thead th {{
         background-color: #4e5968; color: #ffffff; font-weight: 700;
-        text-align: center; padding: 8px 6px; border: 1px solid #3d4654;
-        position: sticky; top: 0; z-index: 1;
+        text-align: center; padding: 8px 10px; border: 1px solid #3d4654;
+        position: sticky; top: 0; z-index: 2;
         cursor: pointer; user-select: none;
         white-space: nowrap;
     }}
     .perf-table thead th:hover {{ background-color: #3d4654; }}
     .perf-table thead th .sort-arrow {{ margin-left: 3px; font-size: 10px; opacity: 0.5; }}
     .perf-table thead th .sort-arrow.active {{ opacity: 1; }}
-    .perf-table tbody td {{ text-align: center; padding: 6px 6px; border: 1px solid #e5e8eb; white-space: nowrap; }}
-    .perf-table tbody tr:nth-child(even) {{ background-color: #f7f8fa; }}
-    .perf-table tbody tr:hover {{ background-color: #eef1f6; }}
+    
+    /* 본문 셀 */
+    .perf-table tbody td {{
+        text-align: center; padding: 6px 10px;
+        border: 1px solid #e5e8eb; white-space: nowrap;
+        background-color: #ffffff;
+    }}
+    .perf-table tbody tr:nth-child(even) td {{ background-color: #f7f8fa; }}
+    .perf-table tbody tr:hover td {{ background-color: #eef1f6; }}
     .shortfall-cell {{ color: rgb(128, 0, 0); font-weight: 700; }}
     
-    /* 반응형: 화면 폭에 따라 자동 축소 */
+    /* 좌측 고정 열 공통 */
+    .col-freeze {{
+        position: sticky;
+        z-index: 1;
+    }}
+    /* 좌측 고정 + 헤더 교차 (좌상단 코너) → 최상위 z-index */
+    thead th.col-freeze {{
+        z-index: 3;
+    }}
+    /* 고정 열 우측에 그림자 구분선 */
+    .col-freeze-last {{
+        box-shadow: 2px 0 5px rgba(0,0,0,0.08);
+    }}
+    
     @media (max-width: 1200px) {{
         .perf-table {{ font-size: {max(10, 13 - num_cols // 3)}px; }}
-        .perf-table thead th, .perf-table tbody td {{ padding: 5px 4px; }}
+        .perf-table thead th, .perf-table tbody td {{ padding: 5px 6px; }}
     }}
     @media (max-width: 768px) {{
         .perf-table {{ font-size: {max(9, 11 - num_cols // 4)}px; }}
-        .perf-table thead th, .perf-table tbody td {{ padding: 4px 3px; }}
+        .perf-table thead th, .perf-table tbody td {{ padding: 4px 4px; }}
     }}
     </style>
     """
 
-    html += f'<div class="perf-table-wrap"><table class="perf-table" id="{table_id}"><thead><tr>'
-    for col in df.columns:
-        html += f'<th onclick="sortTable(this)">{col} <span class="sort-arrow">▲▼</span></th>'
+    # 테이블 HTML 생성
+    html += f'<div class="perf-table-wrap" id="wrap_{table_id}"><table class="perf-table" id="{table_id}"><thead><tr>'
+    for i, col in enumerate(df.columns):
+        freeze_cls = ""
+        if i < freeze_count:
+            freeze_cls = "col-freeze"
+            if i == freeze_count - 1:
+                freeze_cls += " col-freeze-last"
+        html += f'<th class="{freeze_cls}" data-col="{i}" onclick="sortTable(this)">{col} <span class="sort-arrow">▲▼</span></th>'
     html += '</tr></thead><tbody>'
 
     for _, row in df.iterrows():
         html += '<tr>'
-        for col in df.columns:
+        for i, col in enumerate(df.columns):
             val = row[col]
             cell_val = "" if pd.isna(val) else str(val)
-            if col in shortfall_cols and cell_val and cell_val != "":
-                html += f'<td class="shortfall-cell">{cell_val}</td>'
-            else:
-                html += f'<td>{cell_val}</td>'
+            freeze_cls = ""
+            if i < freeze_count:
+                freeze_cls = "col-freeze"
+                if i == freeze_count - 1:
+                    freeze_cls += " col-freeze-last"
+            extra_cls = " shortfall-cell" if (col in shortfall_cols and cell_val and cell_val != "") else ""
+            html += f'<td class="{freeze_cls}{extra_cls}" data-col="{i}">{cell_val}</td>'
         html += '</tr>'
     html += '</tbody></table></div>'
 
-    # JavaScript: 정렬 + iframe 자동 높이 조절
+    # JavaScript: 틀 고정 left 위치 계산 + 정렬 + 자동 높이
     html += f"""
     <script>
-    // ★ iframe 높이를 내용에 맞게 자동 조절
+    var FREEZE_COUNT = {freeze_count};
+    
+    // ★ 좌측 고정 열의 left 위치를 실제 폭 기준으로 계산
+    function applyFreezePositions() {{
+        var table = document.getElementById("{table_id}");
+        if (!table || FREEZE_COUNT === 0) return;
+        var headerCells = table.querySelectorAll("thead th");
+        
+        // 각 고정 열의 실제 폭 측정
+        var leftPos = [];
+        var cumLeft = 0;
+        for (var i = 0; i < FREEZE_COUNT; i++) {{
+            leftPos.push(cumLeft);
+            cumLeft += headerCells[i].offsetWidth;
+        }}
+        
+        // 모든 고정 셀에 left 적용
+        var allCells = table.querySelectorAll(".col-freeze");
+        allCells.forEach(function(cell) {{
+            var colIdx = parseInt(cell.getAttribute("data-col"));
+            if (colIdx < leftPos.length) {{
+                cell.style.left = leftPos[colIdx] + "px";
+            }}
+        }});
+    }}
+    
+    // ★ iframe 높이 자동 조절
     function autoResize() {{
-        var body = document.body;
-        var html_el = document.documentElement;
-        var height = Math.max(body.scrollHeight, body.offsetHeight, html_el.scrollHeight, html_el.offsetHeight);
+        var wrap = document.getElementById("wrap_{table_id}");
         if (window.frameElement) {{
-            window.frameElement.style.height = height + 'px';
+            var viewH = window.parent.innerHeight || 900;
+            var targetH = Math.min(wrap.scrollHeight + 4, Math.round(viewH * 0.85));
+            window.frameElement.style.height = targetH + "px";
         }}
     }}
-    window.addEventListener('load', autoResize);
-    window.addEventListener('resize', autoResize);
+    
+    window.addEventListener('load', function() {{
+        applyFreezePositions();
+        autoResize();
+    }});
+    window.addEventListener('resize', function() {{
+        applyFreezePositions();
+        autoResize();
+    }});
 
-    // 정렬 기능
+    // ★ 정렬 기능
     var sortState = {{}};
     function sortTable(th) {{
         var table = document.getElementById("{table_id}");
@@ -338,8 +427,8 @@ def render_html_table(df):
         rows.sort(function(a, b) {{
             var aText = a.cells[colIdx].textContent.trim();
             var bText = b.cells[colIdx].textContent.trim();
-            var aNum = parseFloat(aText.replace(/,/g, "").replace(/▲|▼/g, ""));
-            var bNum = parseFloat(bText.replace(/,/g, "").replace(/▲|▼/g, ""));
+            var aNum = parseFloat(aText.replace(/,/g, "").replace(/[▲▼]/g, ""));
+            var bNum = parseFloat(bText.replace(/,/g, "").replace(/[▲▼]/g, ""));
             if (aText === "" && bText === "") return 0;
             if (aText === "") return 1;
             if (bText === "") return -1;
@@ -350,7 +439,6 @@ def render_html_table(df):
         }});
 
         rows.forEach(function(r) {{ tbody.appendChild(r); }});
-
         headers.forEach(function(h, i) {{
             var arrow = h.querySelector(".sort-arrow");
             if (i === colIdx) {{
@@ -361,8 +449,6 @@ def render_html_table(df):
                 arrow.className = "sort-arrow";
             }}
         }});
-
-        // 정렬 후 높이 재계산
         setTimeout(autoResize, 50);
     }}
     </script>
@@ -374,6 +460,15 @@ def render_html_table(df):
 # ==========================================
 st.sidebar.title("메뉴")
 menu = st.sidebar.radio("이동할 화면을 선택하세요", ["매니저 화면 (로그인)", "관리자 화면 (설정)"])
+st.sidebar.divider()
+if st.sidebar.button("🔄 시스템 초기화 (오류 시)", type="secondary"):
+    try:
+        if os.path.exists(CONFIG_FILE):
+            os.remove(CONFIG_FILE)
+    except Exception:
+        pass
+    _reset_session_state()
+    st.rerun()
 
 # ==========================================
 # 4. 관리자 화면 (Admin View)
@@ -396,7 +491,7 @@ if menu == "관리자 화면 (설정)":
         st.stop()
     
     st.header("1. 데이터 파일 업로드 및 관리")
-    if not st.session_state['df_merged'].empty:
+    if has_data():
         st.success(f"✅ 현재 **{len(st.session_state['df_merged'])}행**의 데이터가 운영 중입니다. 새 파일을 업로드하면 데이터만 교체됩니다 (설정 유지).")
     
     col_file1, col_file2 = st.columns(2)
@@ -489,7 +584,7 @@ if menu == "관리자 화면 (설정)":
     st.divider()
     
     # ✅ 설정 검증 경고 표시 (열이 사라진 경우)
-    if not st.session_state['df_merged'].empty:
+    if has_data():
         warnings = []
         if not st.session_state['manager_col']:
             warnings.append("⚠️ **매니저 코드 열**이 설정되지 않았습니다. 아래 2번에서 다시 선택해주세요.")
@@ -673,7 +768,9 @@ if menu == "관리자 화면 (설정)":
 # ==========================================
 elif menu == "매니저 화면 (로그인)":
     st.session_state['admin_authenticated'] = False
-    if st.session_state['df_merged'].empty or not st.session_state['manager_col']:
+    
+    df_check = st.session_state.get('df_merged', pd.DataFrame())
+    if not isinstance(df_check, pd.DataFrame) or df_check.empty or not st.session_state.get('manager_col'):
         st.title("👤 매니저 전용 실적 현황")
         st.warning("현재 저장된 데이터가 없거나 관리자 설정이 완료되지 않았습니다.")
         st.stop()
@@ -831,9 +928,7 @@ elif menu == "매니저 화면 (로그인)":
                         
                         final_df[c] = final_df[c].apply(format_with_comma_and_hide_zero)
                 
-                # 6. ★ HTML 테이블로 렌더링 (반응형 + 자동 높이 조절)
-                import streamlit.components.v1 as components
+                # 6. ★ HTML 테이블로 렌더링 (틀 고정 + 정렬 + 반응형)
                 table_html = render_html_table(final_df)
-                # 초기 높이를 넉넉하게 잡고, JS가 실제 내용에 맞춰 자동 조절
-                initial_height = min(45 + len(final_df) * 36 + 50, 10000)
-                components.html(table_html, height=initial_height, scrolling=False)
+                # 테이블 내부 스크롤 사용 — iframe 높이는 뷰포트 85%로 제한
+                components.html(table_html, height=800, scrolling=False)
