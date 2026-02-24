@@ -124,6 +124,7 @@ def load_data_and_config():
                 st.session_state['df_merged'] = data.get('df_merged', pd.DataFrame())
                 st.session_state['manager_col'] = data.get('manager_col', "")
                 st.session_state['manager_name_col'] = data.get('manager_name_col', "")
+                st.session_state['manager_col2'] = data.get('manager_col2', "")
                 st.session_state['admin_cols'] = data.get('admin_cols', [])
                 st.session_state['admin_goals'] = data.get('admin_goals', {})
                 st.session_state['admin_categories'] = data.get('admin_categories', [])
@@ -138,6 +139,7 @@ def save_data_and_config():
         'df_merged': st.session_state.get('df_merged', pd.DataFrame()),
         'manager_col': st.session_state.get('manager_col', ""),
         'manager_name_col': st.session_state.get('manager_name_col', ""),
+        'manager_col2': st.session_state.get('manager_col2', ""),
         'admin_cols': st.session_state.get('admin_cols', []),
         'admin_goals': st.session_state.get('admin_goals', {}),
         'admin_categories': st.session_state.get('admin_categories', []),
@@ -360,6 +362,9 @@ if menu == "관리자 화면 (설정)":
                                 df_merged[base] = df_merged[c1].combine_first(df_merged[c2])
                                 df_merged.drop(columns=[c1, c2], inplace=True)
                         
+                        # ✅ 두 파일의 merge key를 통합한 검색용 키 생성
+                        df_merged['_unified_search_key'] = df_merged['merge_key1'].combine_first(df_merged['merge_key2'])
+                        
                         # merge key 선택값 저장 (다음 업로드 시 자동 선택)
                         st.session_state['merge_key1_col'] = key1
                         st.session_state['merge_key2_col'] = key2
@@ -371,6 +376,8 @@ if menu == "관리자 화면 (설정)":
                         # manager_col / manager_name_col 검증
                         if st.session_state['manager_col'] not in new_cols:
                             st.session_state['manager_col'] = ""
+                        if st.session_state.get('manager_col2', '') and st.session_state['manager_col2'] not in new_cols:
+                            st.session_state['manager_col2'] = ""
                         if st.session_state['manager_name_col'] not in new_cols:
                             st.session_state['manager_name_col'] = ""
                         
@@ -412,21 +419,30 @@ if menu == "관리자 화면 (설정)":
         for w in warnings:
             st.warning(w)
         df = st.session_state['df_merged']
-        available_columns = [c for c in df.columns if c not in ['merge_key1', 'merge_key2']]
+        available_columns = [c for c in df.columns if c not in ['merge_key1', 'merge_key2', '_unified_search_key']]
         
         # ========================================
         st.header("2. 매니저 로그인 및 이름 표시 열 설정")
-        col_m1, col_m2, col_m3 = st.columns([4, 4, 2])
+        st.caption("두 파일의 매니저 코드 열 이름이 다른 경우, 보조 열을 추가 선택하면 양쪽 모두 검색됩니다.")
+        col_m1, col_m2 = st.columns(2)
         with col_m1:
-            manager_col = st.selectbox("🔑 로그인 [매니저 코드] 열", available_columns, 
+            manager_col = st.selectbox("🔑 로그인 [매니저 코드] 열 (파일1)", available_columns, 
                                        index=available_columns.index(st.session_state['manager_col']) if st.session_state['manager_col'] in available_columns else 0)
         with col_m2:
+            manager_col2_options = ["(없음 - 단일 열 사용)"] + available_columns
+            prev_col2 = st.session_state.get('manager_col2', '')
+            idx_col2 = manager_col2_options.index(prev_col2) if prev_col2 in manager_col2_options else 0
+            manager_col2 = st.selectbox("🔑 보조 [매니저 코드] 열 (파일2, 열 이름이 다를 때)", manager_col2_options, index=idx_col2)
+        
+        col_m3, col_m4 = st.columns([8, 2])
+        with col_m3:
             idx_name = available_columns.index(st.session_state['manager_name_col']) if st.session_state['manager_name_col'] in available_columns else 0
             manager_name_col = st.selectbox("👤 화면 상단 [매니저 이름] 표시 열", available_columns, index=idx_name)
-        with col_m3:
+        with col_m4:
             st.write(""); st.write("")
             if st.button("저장", key="btn_save_manager"):
                 st.session_state['manager_col'] = manager_col
+                st.session_state['manager_col2'] = manager_col2 if manager_col2 != "(없음 - 단일 열 사용)" else ""
                 st.session_state['manager_name_col'] = manager_name_col
                 save_data_and_config()
                 st.success("로그인 및 이름 열 설정이 저장되었습니다.")
@@ -584,22 +600,40 @@ elif menu == "매니저 화면 (로그인)":
         submit_login = st.form_submit_button("로그인 및 조회")
     
     if submit_login and manager_code:
-        df['search_key'] = df[manager_col].apply(clean_key)
         manager_code_clean = clean_key(manager_code)
         
-        my_df = df[df['search_key'] == manager_code_clean].copy()
+        # ✅ 주 매니저 코드 열 검색
+        df['search_key'] = df[manager_col].apply(clean_key)
+        mask = df['search_key'] == manager_code_clean
+        
+        # ✅ 보조 매니저 코드 열 검색 (두 파일의 열 이름이 다를 때)
+        manager_col2 = st.session_state.get('manager_col2', '')
+        if manager_col2 and manager_col2 in df.columns:
+            df['search_key2'] = df[manager_col2].apply(clean_key)
+            mask = mask | (df['search_key2'] == manager_code_clean)
+        
+        my_df = df[mask].copy()
+        
         if my_df.empty:
-            my_df = df[df['search_key'].str.contains(manager_code_clean, na=False)].copy()
+            # 부분 일치 검색 (fallback)
+            partial_mask = df['search_key'].str.contains(manager_code_clean, na=False)
+            if manager_col2 and 'search_key2' in df.columns:
+                partial_mask = partial_mask | df['search_key2'].str.contains(manager_code_clean, na=False)
+            my_df = df[partial_mask].copy()
 
         if my_df.empty:
             st.error(f"❌ 매니저 코드 '{manager_code}'에 일치하는 데이터를 찾을 수 없습니다.")
         else:
-            manager_name = str(my_df[manager_name_col].iloc[0]) if manager_name_col in my_df.columns else "매니저"
+            manager_name = "매니저"
+            if manager_name_col in my_df.columns:
+                name_vals = my_df[manager_name_col].dropna()
+                if not name_vals.empty:
+                    manager_name = str(name_vals.iloc[0])
             
             st.markdown(f"""
             <div class='toss-header'>
                 <h1 class='toss-title'>{manager_name} <span class='toss-subtitle'>({manager_code_clean})</span></h1>
-                <p class='toss-desc'>환영합니다! 산하 팀장분들의 실적 현황입니다. 🚀</p>
+                <p class='toss-desc'>환영합니다! 산하 팀장분들의 실적 현황입니다. (총 {len(my_df)}명) 🚀</p>
             </div>
             """, unsafe_allow_html=True)
             
