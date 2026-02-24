@@ -388,7 +388,7 @@ def render_html_table(df, col_groups=None):
     col_groups = col_groups or []
     has_groups = len(col_groups) > 0
     
-    freeze_keywords = ['맞춤분류', '설계사', '성명', '이름', '팀장', '대리점']
+    freeze_keywords = ['순번', '맞춤분류', '설계사', '성명', '이름', '팀장', '대리점']
     freeze_count = 0
     for i, col in enumerate(df.columns):
         if any(kw in col for kw in freeze_keywords):
@@ -648,6 +648,9 @@ def render_html_table(df, col_groups=None):
             return asc ? aT.localeCompare(bT,'ko') : bT.localeCompare(aT,'ko');
         }});
         rows.forEach(function(r) {{ tb.appendChild(r); }});
+        // 순번 재배정
+        var allRows = tb.querySelectorAll("tr");
+        allRows.forEach(function(r, idx) {{ if (r.cells[0]) r.cells[0].textContent = idx + 1; }});
         t.querySelectorAll("thead th").forEach(function(h) {{
             var ar = h.querySelector(".sa"); if (!ar) return;
             var hi = parseInt(h.getAttribute("data-col"));
@@ -923,7 +926,7 @@ if menu == "관리자 화면 (설정)":
                 with row_c1:
                     disp = item.get('display_name', item['col'])
                     fb_text = f" ← 대체: `{item['fallback_col']}`" if item.get('fallback_col') else ""
-                    st.markdown(f"- 📄 원본: `{item['col']}`{fb_text} → **화면 표시: [{disp}]** ({item['type']}) | 조건: `{item['condition']}`")
+                    st.markdown(f"- 📄 원본: `{item['col']}`{fb_text} | 화면 표시: [{disp}]** ({item['type']}) | 조건: `{item['condition']}`")
                 with row_c2:
                     if st.button("❌ 삭제", key=f"del_col_{i}"):
                         st.session_state['admin_cols'].pop(i)
@@ -972,7 +975,7 @@ if menu == "관리자 화면 (설정)":
                 with row_c1:
                     ref_text = f" (상한: **{goal['ref_col']}** 값까지)" if goal.get('ref_col') else " (고정 구간)"
                     tiers_display = [f"{int(t)//10000}만" if t % 10000 == 0 else f"{t:,.0f}" for t in goal['tiers']]
-                    st.markdown(f"- **{goal['target_col']}** → 구간: {', '.join(tiers_display)}{ref_text}")
+                    st.markdown(f"- **{goal['target_col']}** | 구간: {', '.join(tiers_display)}{ref_text}")
                 with row_c2:
                     if st.button("❌ 삭제", key=f"del_goal_{i}"):
                         goals.pop(i)
@@ -1012,7 +1015,7 @@ if menu == "관리자 화면 (설정)":
                 row_c1, row_c2 = st.columns([8, 2])
                 with row_c1:
                     cond_strs = [f"`{c['col']}` {c['cond']}" for c in cat.get('conditions', [{'col': cat.get('col'), 'cond': cat.get('condition')}])]
-                    st.markdown(f"- 조건: **{' AND '.join(cond_strs)}** → **[{cat['name']}]** 태그 부여")
+                    st.markdown(f"- 조건: **{' AND '.join(cond_strs)}** | **[{cat['name']}]** 태그 부여")
                 with row_c2:
                     if st.button("❌ 삭제", key=f"del_cat_{i}"):
                         st.session_state['admin_categories'].pop(i)
@@ -1060,7 +1063,7 @@ if menu == "관리자 화면 (설정)":
 
         # ========================================
         st.header("8. 📊 항목 그룹 헤더 설정")
-        st.caption("여러 항목을 묶어서 상단에 그룹명을 표시합니다. (예: A, B, C 항목 → '2~3월 시책 현황')")
+        st.caption("여러 항목을 묶어서 상단에 그룹명을 표시합니다. (예: A, B, C 항목을 '2~3월 시책 현황')")
         
         # 표시 순서에 등록된 항목 목록을 선택지로 사용
         col_order = st.session_state.get('col_order', [])
@@ -1275,9 +1278,12 @@ elif menu == "매니저 화면 (로그인)":
             else:
                 final_df = my_df[ordered_final_cols].copy()
                 
+                # 순번 열 추가 (맨 앞)
+                final_df.insert(0, '순번', range(1, len(final_df) + 1))
+                
                 # 5. 세 자리 콤마(,) 포맷팅 및 [0값 빈칸 숨김 처리]
                 for c in final_df.columns:
-                    if '코드' not in c and '연도' not in c:
+                    if c != '순번' and '코드' not in c and '연도' not in c:
                         def format_with_comma_and_hide_zero(val):
                             try:
                                 if pd.isna(val) or str(val).strip() == "": return ""
