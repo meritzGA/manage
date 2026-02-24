@@ -12,6 +12,11 @@ from datetime import datetime
 
 st.set_page_config(page_title="지원매니저별 실적 관리 시스템", layout="wide")
 
+# 📱 모바일 뷰포트 메타 태그 삽입
+st.markdown("""
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+""", unsafe_allow_html=True)
+
 DATA_FILE = "app_data.pkl"
 CONFIG_FILE = "app_config.pkl"
 
@@ -32,7 +37,6 @@ html, body, [class*="css"] {
     margin-bottom: 24px;
     box-shadow: 0 4px 16px rgba(0,0,0,0.1);
 }
-/* 매니저 이름 흰색 강제 적용 */
 .toss-title {
     color: #ffffff !important; 
     font-size: 36px;
@@ -40,7 +44,6 @@ html, body, [class*="css"] {
     margin: 0;
     letter-spacing: -0.5px;
 }
-/* 코드명 서브타이틀 */
 .toss-subtitle {
     color: #ffcccc !important; 
     font-size: 24px;
@@ -54,15 +57,14 @@ html, body, [class*="css"] {
     font-weight: 500;
 }
 
-/* ===============================================
-   실적 테이블 스타일 (HTML 테이블 전용)
-   =============================================== */
+/* 실적 테이블 스타일 */
 .perf-table-wrap {
     width: 100%;
     overflow-x: auto;
     border-radius: 12px;
     box-shadow: 0 2px 10px rgba(0,0,0,0.08);
     margin-top: 8px;
+    -webkit-overflow-scrolling: touch;
 }
 .perf-table {
     width: 100%;
@@ -70,7 +72,6 @@ html, body, [class*="css"] {
     font-size: 14px;
     white-space: nowrap;
 }
-/* 헤더: 짙은 회색 배경 + 흰색 글씨 */
 .perf-table thead th {
     background-color: #4e5968;
     color: #ffffff;
@@ -81,23 +82,6 @@ html, body, [class*="css"] {
     position: sticky;
     top: 0;
     z-index: 1;
-}
-/* 본문 셀: 가운데 정렬 */
-.perf-table tbody td {
-    text-align: center;
-    padding: 8px 12px;
-    border: 1px solid #e5e8eb;
-}
-/* 짝수 행 배경 */
-.perf-table tbody tr:nth-child(even) {
-    background-color: #f7f8fa;
-}
-/* 호버 효과 */
-.perf-table tbody tr:hover {
-    background-color: #eef1f6;
-}
-/* 헤더 클릭 정렬 커서 & 화살표 */
-.perf-table thead th {
     cursor: pointer;
     user-select: none;
 }
@@ -109,20 +93,108 @@ html, body, [class*="css"] {
 .perf-table thead th .sort-arrow.active {
     opacity: 1;
 }
-/* 부족금액 강조: 다크레드 */
+.perf-table tbody td {
+    text-align: center;
+    padding: 8px 12px;
+    border: 1px solid #e5e8eb;
+}
+.perf-table tbody tr:nth-child(even) {
+    background-color: #f7f8fa;
+}
+.perf-table tbody tr:hover {
+    background-color: #eef1f6;
+}
 .shortfall-cell {
     color: rgb(128, 0, 0);
     font-weight: 700;
 }
-/* Streamlit 메인 영역 패딩 최소화 → 화면 폭 최대 활용 */
+/* 메인 영역 패딩 최소화 */
 .block-container {
     padding-left: 1.5rem !important;
     padding-right: 1.5rem !important;
     max-width: 100% !important;
 }
-/* iframe(테이블) 전체 폭 사용 */
 iframe {
     width: 100% !important;
+}
+
+/* ========================================
+   📱 모바일 반응형 (768px 이하)
+   ======================================== */
+@media (max-width: 768px) {
+    .block-container {
+        padding-left: 0.5rem !important;
+        padding-right: 0.5rem !important;
+    }
+    /* 헤더 축소 */
+    .toss-header {
+        padding: 18px 16px;
+        border-radius: 14px;
+        margin-bottom: 14px;
+    }
+    .toss-title {
+        font-size: 22px !important;
+    }
+    .toss-subtitle {
+        font-size: 14px !important;
+        display: block;
+        margin-left: 0;
+        margin-top: 4px;
+    }
+    .toss-desc {
+        font-size: 13px !important;
+        margin-top: 6px;
+    }
+    /* 기준일 날짜 */
+    .toss-header .data-date {
+        font-size: 11px !important;
+        float: none !important;
+        display: block;
+        text-align: right;
+        margin-bottom: 4px;
+    }
+    /* 사이드바 닫혔을 때 메인 패딩 */
+    [data-testid="stSidebar"][aria-expanded="false"] ~ .block-container {
+        padding-left: 0.5rem !important;
+    }
+    /* iframe 높이 모바일 최적화 */
+    iframe {
+        min-height: 60vh !important;
+    }
+    /* selectbox, text_input 등 위젯 크기 */
+    [data-testid="stTextInput"] input,
+    [data-testid="stSelectbox"] > div > div {
+        font-size: 14px !important;
+    }
+    /* 폼 버튼 크기 */
+    .stButton > button, [data-testid="stFormSubmitButton"] > button {
+        width: 100% !important;
+        padding: 10px !important;
+        font-size: 15px !important;
+    }
+}
+
+/* ========================================
+   📱 소형 모바일 (480px 이하)
+   ======================================== */
+@media (max-width: 480px) {
+    .block-container {
+        padding-left: 0.25rem !important;
+        padding-right: 0.25rem !important;
+    }
+    .toss-header {
+        padding: 14px 12px;
+        border-radius: 10px;
+    }
+    .toss-title {
+        font-size: 19px !important;
+    }
+    .toss-subtitle {
+        font-size: 12px !important;
+    }
+    .toss-desc {
+        font-size: 12px !important;
+    }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -380,6 +452,9 @@ def render_html_table(df, col_groups=None):
         return c
 
     # ── CSS ──
+    # 모바일 감지 기반 폰트 크기 결정
+    mob_font = max(9, base_font - 2)
+    
     html = f"""
     <style>
     @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
@@ -388,6 +463,7 @@ def render_html_table(df, col_groups=None):
     .perf-table-wrap {{
         width: 100%; max-height: 85vh; overflow: auto;
         border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+        -webkit-overflow-scrolling: touch;
     }}
     .perf-table {{
         width: max-content; min-width: 100%;
@@ -403,7 +479,6 @@ def render_html_table(df, col_groups=None):
     /* 그룹 행 */
     .perf-table .rg th {{ top: 0; height: {grp_h}px; padding: 4px 6px; cursor: default; }}
     .perf-table .rg .ge {{ background: #4e5968; border-bottom-color: #4e5968; }}
-    /* 그룹 셀: 내부 border 제거로 시각적 병합 */
     .perf-table .rg .gc {{ border-left: none; border-right: none; }}
     .perf-table .rg .gc-first {{ border-left: 1px solid #3d4654; border-right: none; }}
     .perf-table .rg .gc-last {{ border-left: none; border-right: 1px solid #3d4654; }}
@@ -428,18 +503,36 @@ def render_html_table(df, col_groups=None):
     .col-freeze {{ position: sticky; z-index: 1; }}
     thead th.col-freeze {{ z-index: 3; }}
     .col-freeze-last {{ box-shadow: 2px 0 5px rgba(0,0,0,0.08); }}
+    
+    /* 📱 태블릿 */
     @media (max-width: 1200px) {{
         .perf-table {{ font-size: {max(10, 13 - num_cols // 3)}px; }}
         .perf-table thead th, .perf-table tbody td {{ padding: 5px 6px; }}
     }}
+    /* 📱 모바일 */
     @media (max-width: 768px) {{
-        .perf-table {{ font-size: {max(9, 11 - num_cols // 4)}px; }}
-        .perf-table thead th, .perf-table tbody td {{ padding: 4px 4px; }}
+        .perf-table-wrap {{ max-height: 75vh; border-radius: 8px; }}
+        .perf-table {{ font-size: {mob_font}px; }}
+        .perf-table thead th {{ padding: 4px 5px; }}
+        .perf-table tbody td {{ padding: 4px 5px; }}
+        .perf-table .rg th {{ height: {grp_h - 4}px; padding: 2px 4px; font-size: {mob_font}px; }}
+        .perf-table .rc th {{ height: {col_h - 6}px; padding: 4px 5px; }}
+        .sa {{ font-size: 8px; margin-left: 1px; }}
+        /* 좌측 고정 최대 2열로 제한 (좁은 화면) */
+        .col-freeze-last {{ box-shadow: 2px 0 3px rgba(0,0,0,0.12); }}
+    }}
+    /* 📱 소형 모바일 */
+    @media (max-width: 480px) {{
+        .perf-table {{ font-size: {max(8, mob_font - 1)}px; }}
+        .perf-table thead th, .perf-table tbody td {{ padding: 3px 3px; }}
+        .perf-table .rg th {{ height: {grp_h - 8}px; font-size: {max(8, mob_font - 1)}px; }}
+        .perf-table .rc th {{ height: {col_h - 10}px; }}
     }}
     </style>
     """
 
     # ── 테이블 시작 ──
+    html += '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
     html += f'<div class="perf-table-wrap" id="wrap_{table_id}"><table class="perf-table" id="{table_id}"><thead>'
     
     # ── 그룹 행: 항상 N개 <th> (colspan 없음) ──
@@ -488,9 +581,15 @@ def render_html_table(df, col_groups=None):
     # ── JavaScript ──
     html += f"""
     <script>
-    var FC = {freeze_count};
+    var FC_DESKTOP = {freeze_count};
+    var FC = FC_DESKTOP;
+    
+    function isMobile() {{ return window.innerWidth <= 768; }}
+    
     function applyFreeze() {{
         var t = document.getElementById("{table_id}");
+        // 모바일에서는 고정 열 최대 2개로 제한
+        FC = isMobile() ? Math.min(FC_DESKTOP, 2) : FC_DESKTOP;
         if (!t || FC === 0) return;
         var fr = t.querySelector("tbody tr");
         if (!fr) return;
@@ -498,14 +597,23 @@ def render_html_table(df, col_groups=None):
         for (var i = 0; i < FC; i++) {{ lp.push(cl); if (fr.cells[i]) cl += fr.cells[i].offsetWidth; }}
         t.querySelectorAll(".col-freeze").forEach(function(c) {{
             var idx = parseInt(c.getAttribute("data-col"));
-            if (!isNaN(idx) && idx < lp.length) c.style.left = lp[idx] + "px";
+            if (!isNaN(idx) && idx < FC) {{
+                c.style.left = lp[idx] + "px";
+                c.style.position = "sticky";
+                c.style.zIndex = c.tagName === "TH" ? "3" : "1";
+            }} else if (!isNaN(idx) && idx >= FC) {{
+                // 모바일에서 초과 고정 열 해제
+                c.style.position = "static";
+                c.style.boxShadow = "none";
+            }}
         }});
     }}
     function autoResize() {{
         var w = document.getElementById("wrap_{table_id}");
         if (window.frameElement) {{
             var vh = window.parent.innerHeight || 900;
-            window.frameElement.style.height = Math.min(w.scrollHeight + 4, Math.round(vh * 0.85)) + "px";
+            var ratio = isMobile() ? 0.75 : 0.85;
+            window.frameElement.style.height = Math.min(w.scrollHeight + 4, Math.round(vh * ratio)) + "px";
         }}
     }}
     window.addEventListener('load', function() {{ applyFreeze(); autoResize(); }});
@@ -1000,13 +1108,13 @@ elif menu == "매니저 화면 (로그인)":
                     manager_name = str(name_vals.iloc[0])
             
             data_date = st.session_state.get('data_date', '')
-            date_html = f"<span style='font-size:14px; color:rgba(255,255,255,0.85); float:right; margin-top:8px;'>📅 데이터 기준일: {data_date}</span>" if data_date else ""
+            date_html = f"<span class='data-date' style='font-size:14px; color:rgba(255,255,255,0.85); float:right; margin-top:8px;'>📅 데이터 기준일: {data_date}</span>" if data_date else ""
             
             st.markdown(f"""
             <div class='toss-header'>
                 {date_html}
                 <h1 class='toss-title'>{manager_name} <span class='toss-subtitle'>({manager_code_clean})</span></h1>
-                <p class='toss-desc'>환영합니다! 산하 팀장분들의 실적 현황입니다. (총 {len(my_df)}명) 🚀</p>
+                <p class='toss-desc'>산하 팀장분들의 실적 현황입니다. (총 {len(my_df)}명)</p>
             </div>
             """, unsafe_allow_html=True)
             
