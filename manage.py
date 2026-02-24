@@ -282,8 +282,23 @@ def render_html_table(df, col_groups=None):
     
     # 각 컬럼 인덱스에 대한 그룹 정보 계산
     # group_info[i] = (group_name, position) where position: 'first', 'mid', 'last', 'solo' or None
+    # 그룹별 색상 팔레트 (최대 8개, 순환)
+    GROUP_COLORS = [
+        '#2B6CB0',  # 블루
+        '#2F855A',  # 그린
+        '#9B2C2C',  # 레드
+        '#6B46C1',  # 퍼플
+        '#B7791F',  # 골드
+        '#2C7A7B',  # 틸
+        '#C05621',  # 오렌지
+        '#702459',  # 핑크
+    ]
+    
     col_to_group = {}
-    for grp in col_groups:
+    group_color_map = {}  # group_name → color
+    for gi, grp in enumerate(col_groups):
+        color = GROUP_COLORS[gi % len(GROUP_COLORS)]
+        group_color_map[grp['name']] = color
         for c in grp['cols']:
             col_to_group[c] = grp['name']
     
@@ -336,10 +351,18 @@ def render_html_table(df, col_groups=None):
     /* 그룹 행 */
     .perf-table .rg th {{ top: 0; height: {grp_h}px; padding: 4px 6px; cursor: default; }}
     .perf-table .rg .ge {{ background: #4e5968; border-bottom-color: #4e5968; }}
-    .perf-table .rg .gf {{ background: #364152; border-right: none; }}
-    .perf-table .rg .gm {{ background: #364152; border-left: none; border-right: none; color: transparent; font-size:0; }}
-    .perf-table .rg .gl {{ background: #364152; border-left: none; }}
-    .perf-table .rg .gs {{ background: #364152; }}
+    /* gf/gm/gl/gs: 색상은 inline style로 그룹별 적용 */
+    .perf-table .rg .gf {{ border-right: none; position: relative; overflow: visible; }}
+    .perf-table .rg .gm {{ border-left: none; border-right: none; font-size: 0; }}
+    .perf-table .rg .gl {{ border-left: none; font-size: 0; }}
+    .perf-table .rg .gs {{ }}
+    /* 그룹 제목 라벨 (JS로 가운데 배치) */
+    .grp-lbl {{
+        position: absolute; top: 0; left: 0;
+        height: 100%; display: flex; align-items: center; justify-content: center;
+        pointer-events: none; font-weight: 700; white-space: nowrap;
+        font-size: {base_font}px; color: #fff;
+    }}
     /* 컬럼 행 */
     .perf-table .rc th {{
         top: {grp_h if has_groups else 0}px; height: {col_h}px;
@@ -381,16 +404,17 @@ def render_html_table(df, col_groups=None):
             gname, pos = group_info[i]
             f_cls = fc(i)
             if gname is None:
-                # 그룹 아닌 열 → 빈 칸
                 html += f'<th class="ge {f_cls}" data-col="{i}"></th>'
-            elif pos == 'first':
-                html += f'<th class="gf {f_cls}" data-col="{i}">{gname}</th>'
-            elif pos == 'mid':
-                html += f'<th class="gm {f_cls}" data-col="{i}">{gname}</th>'
-            elif pos == 'last':
-                html += f'<th class="gl {f_cls}" data-col="{i}"></th>'
-            else:  # solo
-                html += f'<th class="gs {f_cls}" data-col="{i}">{gname}</th>'
+            else:
+                gc = group_color_map.get(gname, '#364152')
+                if pos == 'first':
+                    html += f'<th class="gf {f_cls}" style="background:{gc};" data-col="{i}" data-grp="{gname}"><span class="grp-lbl" data-grp-lbl="{gname}">{gname}</span></th>'
+                elif pos == 'mid':
+                    html += f'<th class="gm {f_cls}" style="background:{gc};" data-col="{i}" data-grp="{gname}">&nbsp;</th>'
+                elif pos == 'last':
+                    html += f'<th class="gl {f_cls}" style="background:{gc};" data-col="{i}" data-grp="{gname}">&nbsp;</th>'
+                else:  # solo
+                    html += f'<th class="gs {f_cls}" style="background:{gc};" data-col="{i}" data-grp="{gname}">{gname}</th>'
         html += '</tr>'
     
     # ── 컬럼 행: 항상 N개 <th> ──
@@ -435,8 +459,21 @@ def render_html_table(df, col_groups=None):
             window.frameElement.style.height = Math.min(w.scrollHeight + 4, Math.round(vh * 0.85)) + "px";
         }}
     }}
-    window.addEventListener('load', function() {{ applyFreeze(); autoResize(); }});
-    window.addEventListener('resize', function() {{ applyFreeze(); autoResize(); }});
+    function centerGroupLabels() {{
+        var labels = document.querySelectorAll('.grp-lbl');
+        labels.forEach(function(lbl) {{
+            var grpName = lbl.getAttribute('data-grp-lbl');
+            var firstTh = lbl.parentElement;
+            // 같은 그룹의 모든 셀 찾기
+            var grpCells = document.querySelectorAll('.rg th[data-grp="' + grpName + '"]');
+            if (grpCells.length === 0) return;
+            var totalWidth = 0;
+            grpCells.forEach(function(c) {{ totalWidth += c.offsetWidth; }});
+            lbl.style.width = totalWidth + 'px';
+        }});
+    }}
+    window.addEventListener('load', function() {{ applyFreeze(); centerGroupLabels(); autoResize(); }});
+    window.addEventListener('resize', function() {{ applyFreeze(); centerGroupLabels(); autoResize(); }});
     var ss = {{}};
     function sortTable(th) {{
         var t = document.getElementById("{table_id}");
