@@ -91,6 +91,19 @@ html, body, [class*="css"] {
 .perf-table tbody tr:hover {
     background-color: #eef1f6;
 }
+/* 헤더 클릭 정렬 커서 & 화살표 */
+.perf-table thead th {
+    cursor: pointer;
+    user-select: none;
+}
+.perf-table thead th .sort-arrow {
+    margin-left: 4px;
+    font-size: 11px;
+    opacity: 0.5;
+}
+.perf-table thead th .sort-arrow.active {
+    opacity: 1;
+}
 /* 부족금액 강조: 다크레드 */
 .shortfall-cell {
     color: rgb(128, 0, 0);
@@ -196,12 +209,14 @@ def load_file_data(file_bytes, file_name):
 # ★ HTML 테이블 렌더링 함수
 # ==========================================
 def render_html_table(df):
-    """DataFrame을 짙은회색 헤더 + 가운데 정렬 HTML 테이블로 변환"""
-    shortfall_cols = [c for c in df.columns if '부족금액' in c]
+    """DataFrame을 짙은회색 헤더 + 가운데 정렬 + 헤더 클릭 정렬 HTML 테이블로 변환"""
+    import uuid
+    table_id = f"perf_{uuid.uuid4().hex[:8]}"
+    shortfall_cols = set(c for c in df.columns if '부족금액' in c)
 
-    html = '<div class="perf-table-wrap"><table class="perf-table"><thead><tr>'
+    html = f'<div class="perf-table-wrap"><table class="perf-table" id="{table_id}"><thead><tr>'
     for col in df.columns:
-        html += f'<th>{col}</th>'
+        html += f'<th onclick="sortTable_{table_id}(this)">{col} <span class="sort-arrow">▲▼</span></th>'
     html += '</tr></thead><tbody>'
 
     for _, row in df.iterrows():
@@ -215,6 +230,58 @@ def render_html_table(df):
                 html += f'<td>{cell_val}</td>'
         html += '</tr>'
     html += '</tbody></table></div>'
+
+    # JavaScript: 헤더 클릭 시 오름차순/내림차순 토글 정렬
+    html += f"""
+    <script>
+    (function() {{
+        var sortState_{table_id} = {{}};
+        window.sortTable_{table_id} = function(th) {{
+            var table = document.getElementById("{table_id}");
+            var tbody = table.querySelector("tbody");
+            var rows = Array.from(tbody.querySelectorAll("tr"));
+            var headers = Array.from(table.querySelectorAll("thead th"));
+            var colIdx = headers.indexOf(th);
+            if (colIdx < 0) return;
+
+            // 정렬 방향 토글 (true=오름차순, false=내림차순)
+            var asc = sortState_{table_id}[colIdx] !== true;
+            sortState_{table_id} = {{}};
+            sortState_{table_id}[colIdx] = asc;
+
+            rows.sort(function(a, b) {{
+                var aText = a.cells[colIdx].textContent.trim();
+                var bText = b.cells[colIdx].textContent.trim();
+                // 콤마 제거 후 숫자 비교 시도
+                var aNum = parseFloat(aText.replace(/,/g, ""));
+                var bNum = parseFloat(bText.replace(/,/g, ""));
+                // 빈 문자열은 항상 맨 뒤로
+                if (aText === "" && bText === "") return 0;
+                if (aText === "") return 1;
+                if (bText === "") return -1;
+                if (!isNaN(aNum) && !isNaN(bNum)) {{
+                    return asc ? aNum - bNum : bNum - aNum;
+                }}
+                return asc ? aText.localeCompare(bText, 'ko') : bText.localeCompare(aText, 'ko');
+            }});
+
+            rows.forEach(function(r) {{ tbody.appendChild(r); }});
+
+            // 화살표 표시 업데이트
+            headers.forEach(function(h, i) {{
+                var arrow = h.querySelector(".sort-arrow");
+                if (i === colIdx) {{
+                    arrow.textContent = asc ? "▲" : "▼";
+                    arrow.className = "sort-arrow active";
+                }} else {{
+                    arrow.textContent = "▲▼";
+                    arrow.className = "sort-arrow";
+                }}
+            }});
+        }};
+    }})();
+    </script>
+    """
     return html
 
 # ==========================================
