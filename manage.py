@@ -381,11 +381,14 @@ if menu == "관리자 화면 (설정)":
                         if st.session_state['manager_name_col'] not in new_cols:
                             st.session_state['manager_name_col'] = ""
                         
-                        # admin_cols 검증 - 열이 살아있는 항목만 유지
-                        st.session_state['admin_cols'] = [
-                            item for item in st.session_state['admin_cols']
-                            if item['col'] in new_cols
-                        ]
+                        # admin_cols 검증 - 열이 살아있는 항목만 유지, fallback도 검증
+                        valid_admin_cols = []
+                        for item in st.session_state['admin_cols']:
+                            if item['col'] in new_cols:
+                                if item.get('fallback_col') and item['fallback_col'] not in new_cols:
+                                    item['fallback_col'] = ''
+                                valid_admin_cols.append(item)
+                        st.session_state['admin_cols'] = valid_admin_cols
                         
                         # admin_goals 검증
                         st.session_state['admin_goals'] = {
@@ -451,17 +454,23 @@ if menu == "관리자 화면 (설정)":
 
         # ========================================
         st.header("3. 표시할 데이터 항목 및 필터 추가")
-        c1, c2, c3, c4, c5 = st.columns([3, 2, 2, 2, 1])
-        with c1: sel_col = st.selectbox("항목 선택", available_columns, key="sec3_col")
-        with c2: display_name = st.text_input("표시 명칭 (선택)", placeholder="미입력시 원본유지", key="sec3_disp")
-        with c3: col_type = st.radio("데이터 타입", ["텍스트", "숫자"], horizontal=True, key="sec3_type")
-        with c4: condition = st.text_input("산식 (예: >= 500,000)", key="sec3_cond")
-        with c5:
+        c1, c2, c3 = st.columns([3, 3, 3])
+        with c1: sel_col = st.selectbox("항목 선택 (주 열)", available_columns, key="sec3_col")
+        with c2: 
+            fallback_options = ["(없음)"] + available_columns
+            fallback_col = st.selectbox("대체 열 (주 열에 값이 없을 때)", fallback_options, key="sec3_fallback")
+        with c3: display_name = st.text_input("표시 명칭 (선택)", placeholder="미입력시 원본유지", key="sec3_disp")
+        
+        c4, c5, c6 = st.columns([3, 3, 1])
+        with c4: col_type = st.radio("데이터 타입", ["텍스트", "숫자"], horizontal=True, key="sec3_type")
+        with c5: condition = st.text_input("산식 (예: >= 500,000)", key="sec3_cond")
+        with c6:
             st.write(""); st.write("")
             if st.button("➕ 추가", key="btn_add_col"):
                 final_display_name = display_name.strip() if display_name.strip() else sel_col
+                fb = fallback_col if fallback_col != "(없음)" else ""
                 st.session_state['admin_cols'].append({
-                    "col": sel_col, "display_name": final_display_name, "type": col_type, "condition": condition if col_type == "숫자" else ""
+                    "col": sel_col, "fallback_col": fb, "display_name": final_display_name, "type": col_type, "condition": condition if col_type == "숫자" else ""
                 })
                 save_data_and_config()
                 st.rerun()
@@ -471,7 +480,8 @@ if menu == "관리자 화면 (설정)":
                 row_c1, row_c2 = st.columns([8, 2])
                 with row_c1:
                     disp = item.get('display_name', item['col'])
-                    st.markdown(f"- 📄 원본: `{item['col']}` ➡️ **화면 표시: [{disp}]** ({item['type']}) | 조건: `{item['condition']}`")
+                    fb_text = f" ← 대체: `{item['fallback_col']}`" if item.get('fallback_col') else ""
+                    st.markdown(f"- 📄 원본: `{item['col']}`{fb_text} ➡️ **화면 표시: [{disp}]** ({item['type']}) | 조건: `{item['condition']}`")
                 with row_c2:
                     if st.button("❌ 삭제", key=f"del_col_{i}"):
                         st.session_state['admin_cols'].pop(i)
@@ -663,13 +673,20 @@ elif menu == "매니저 화면 (로그인)":
             # -------------------------------------------------------------------
             for item in st.session_state['admin_cols']:
                 orig_col = item['col']
+                fallback_col = item.get('fallback_col', '')
                 disp_col = item.get('display_name', orig_col)
                 
                 if item['type'] == '숫자' and item['condition']:
                     mask = evaluate_condition(my_df, orig_col, item['condition'])
                     my_df = my_df[mask]
                 
-                my_df[disp_col] = my_df[orig_col]
+                # ✅ 주 열 값이 없으면 대체 열에서 가져오기
+                if fallback_col and fallback_col in my_df.columns and orig_col in my_df.columns:
+                    my_df[disp_col] = my_df[orig_col].combine_first(my_df[fallback_col])
+                elif orig_col in my_df.columns:
+                    my_df[disp_col] = my_df[orig_col]
+                else:
+                    my_df[disp_col] = ""
                 display_cols.append(disp_col)
             
             # -------------------------------------------------------------------
