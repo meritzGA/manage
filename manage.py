@@ -260,16 +260,15 @@ def load_file_data(file_bytes, file_name):
 # ★ HTML 테이블 렌더링 함수
 # ==========================================
 def render_html_table(df, col_groups=None):
-    """DataFrame을 틀 고정 + 그룹 헤더 + 정렬 + 반응형 HTML 테이블로 변환"""
+    """DataFrame을 틀 고정 + 그룹 헤더 + 정렬 + 반응형 HTML 테이블로 변환
+    ★ colspan 없이 셀 수를 항상 동일하게 유지 → 밀림 방지
+    """
     table_id = f"perf_{uuid.uuid4().hex[:8]}"
     num_cols = len(df.columns)
     shortfall_cols = set(c for c in df.columns if '부족금액' in c)
     col_groups = col_groups or []
-    
-    # 그룹 헤더 존재 여부
     has_groups = len(col_groups) > 0
     
-    # 좌측 고정할 열 개수 자동 판단
     freeze_keywords = ['맞춤분류', '설계사', '성명', '이름', '팀장', '대리점']
     freeze_count = 0
     for i, col in enumerate(df.columns):
@@ -278,78 +277,89 @@ def render_html_table(df, col_groups=None):
     freeze_count = min(freeze_count, 4)
 
     base_font = max(11, 15 - num_cols // 3)
+    grp_h = 30
+    col_h = 36
     
-    # 그룹 매핑: 각 컬럼이 어떤 그룹에 속하는지
+    # 각 컬럼 인덱스에 대한 그룹 정보 계산
+    # group_info[i] = (group_name, position) where position: 'first', 'mid', 'last', 'solo' or None
     col_to_group = {}
     for grp in col_groups:
         for c in grp['cols']:
             col_to_group[c] = grp['name']
     
+    columns = list(df.columns)
+    group_info = []  # (group_name_or_None, 'first'|'mid'|'last'|'solo'|None)
+    for i, col in enumerate(columns):
+        gname = col_to_group.get(col, None)
+        if gname is None:
+            group_info.append((None, None))
+        else:
+            prev_grp = col_to_group.get(columns[i-1], None) if i > 0 else None
+            next_grp = col_to_group.get(columns[i+1], None) if i < len(columns)-1 else None
+            if prev_grp == gname and next_grp == gname:
+                group_info.append((gname, 'mid'))
+            elif prev_grp != gname and next_grp == gname:
+                group_info.append((gname, 'first'))
+            elif prev_grp == gname and next_grp != gname:
+                group_info.append((gname, 'last'))
+            else:
+                group_info.append((gname, 'solo'))  # 1열 그룹
+    
+    def fc(i):
+        """freeze class"""
+        if i >= freeze_count: return ""
+        c = "col-freeze"
+        if i == freeze_count - 1: c += " col-freeze-last"
+        return c
+
+    # ── CSS ──
     html = f"""
     <style>
     @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
     * {{ box-sizing: border-box; }}
     html, body {{ margin: 0; padding: 0; font-family: 'Pretendard', -apple-system, 'Noto Sans KR', sans-serif; }}
-    
     .perf-table-wrap {{
-        width: 100%;
-        max-height: 85vh;
-        overflow: auto;
-        border-radius: 12px;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.08);
-        position: relative;
+        width: 100%; max-height: 85vh; overflow: auto;
+        border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.08);
     }}
     .perf-table {{
-        width: max-content;
-        min-width: 100%;
-        border-collapse: separate;
-        border-spacing: 0;
-        white-space: nowrap;
-        font-size: {base_font}px;
+        width: max-content; min-width: 100%;
+        border-collapse: separate; border-spacing: 0;
+        white-space: nowrap; font-size: {base_font}px;
     }}
-    
-    /* 헤더 공통 */
+    /* 공통 헤더 */
     .perf-table thead th {{
-        background-color: #4e5968; color: #ffffff; font-weight: 700;
-        text-align: center; padding: 8px 10px; border: 1px solid #3d4654;
-        position: sticky; z-index: 2;
-        white-space: nowrap;
+        background-color: #4e5968; color: #fff; font-weight: 700;
+        text-align: center; border: 1px solid #3d4654;
+        position: sticky; z-index: 2; white-space: nowrap;
     }}
-    /* 그룹 헤더 행 (1행) */
-    .perf-table thead tr.group-row th {{
-        top: 0;
-        cursor: default;
-    }}
-    .perf-table thead tr.group-row th.group-label {{
-        background-color: #364152;
-        font-size: {max(11, base_font)}px;
-        letter-spacing: 0.5px;
-    }}
-    /* 컬럼 헤더 행 (2행 또는 1행) */
-    .perf-table thead tr.col-row th {{
-        top: {"36px" if has_groups else "0"};
-        cursor: pointer;
-        user-select: none;
+    /* 그룹 행 */
+    .perf-table .rg th {{ top: 0; height: {grp_h}px; padding: 4px 6px; cursor: default; }}
+    .perf-table .rg .ge {{ background: #4e5968; border-bottom-color: #4e5968; }}
+    .perf-table .rg .gf {{ background: #364152; border-right: none; }}
+    .perf-table .rg .gm {{ background: #364152; border-left: none; border-right: none; color: transparent; font-size:0; }}
+    .perf-table .rg .gl {{ background: #364152; border-left: none; }}
+    .perf-table .rg .gs {{ background: #364152; }}
+    /* 컬럼 행 */
+    .perf-table .rc th {{
+        top: {grp_h if has_groups else 0}px; height: {col_h}px;
+        padding: 6px 10px; cursor: pointer; user-select: none;
     }}
     .perf-table thead th:hover {{ background-color: #3d4654; }}
-    .perf-table thead th .sort-arrow {{ margin-left: 3px; font-size: 10px; opacity: 0.5; }}
-    .perf-table thead th .sort-arrow.active {{ opacity: 1; }}
-    
-    /* 본문 셀 */
+    .sa {{ margin-left: 3px; font-size: 10px; opacity: 0.5; }}
+    .sa.active {{ opacity: 1; }}
+    /* 본문 */
     .perf-table tbody td {{
         text-align: center; padding: 6px 10px;
         border: 1px solid #e5e8eb; white-space: nowrap;
-        background-color: #ffffff;
+        background-color: #fff;
     }}
     .perf-table tbody tr:nth-child(even) td {{ background-color: #f7f8fa; }}
     .perf-table tbody tr:hover td {{ background-color: #eef1f6; }}
-    .shortfall-cell {{ color: rgb(128, 0, 0); font-weight: 700; }}
-    
-    /* 좌측 고정 열 */
+    .sc {{ color: rgb(128, 0, 0); font-weight: 700; }}
     .col-freeze {{ position: sticky; z-index: 1; }}
     thead th.col-freeze {{ z-index: 3; }}
     .col-freeze-last {{ box-shadow: 2px 0 5px rgba(0,0,0,0.08); }}
-    
     @media (max-width: 1200px) {{
         .perf-table {{ font-size: {max(10, 13 - num_cols // 3)}px; }}
         .perf-table thead th, .perf-table tbody td {{ padding: 5px 6px; }}
@@ -361,147 +371,94 @@ def render_html_table(df, col_groups=None):
     </style>
     """
 
-    columns = list(df.columns)
-    
+    # ── 테이블 시작 ──
     html += f'<div class="perf-table-wrap" id="wrap_{table_id}"><table class="perf-table" id="{table_id}"><thead>'
     
-    # ── 그룹 헤더 행 (1행) ──
+    # ── 그룹 행: 항상 N개 <th> (colspan 없음) ──
     if has_groups:
-        html += '<tr class="group-row">'
-        i = 0
-        while i < len(columns):
-            col = columns[i]
-            grp_name = col_to_group.get(col, None)
-            
-            # 고정 열 CSS
-            freeze_cls = ""
-            if i < freeze_count:
-                freeze_cls = "col-freeze"
-                if i == freeze_count - 1:
-                    freeze_cls += " col-freeze-last"
-            
-            if grp_name:
-                # 같은 그룹의 연속 컬럼 수 세기
-                span = 0
-                for j in range(i, len(columns)):
-                    if col_to_group.get(columns[j]) == grp_name:
-                        span += 1
-                    else:
-                        break
-                html += f'<th class="group-label {freeze_cls}" colspan="{span}" data-col="{i}">{grp_name}</th>'
-                i += span
-            else:
-                # 그룹 없는 컬럼은 2행 병합 (rowspan)
-                html += f'<th class="{freeze_cls}" rowspan="2" data-col="{i}" onclick="sortTable(this)">{col} <span class="sort-arrow">▲▼</span></th>'
-                i += 1
+        html += '<tr class="rg">'
+        for i, col in enumerate(columns):
+            gname, pos = group_info[i]
+            f_cls = fc(i)
+            if gname is None:
+                # 그룹 아닌 열 → 빈 칸
+                html += f'<th class="ge {f_cls}" data-col="{i}"></th>'
+            elif pos == 'first':
+                html += f'<th class="gf {f_cls}" data-col="{i}">{gname}</th>'
+            elif pos == 'mid':
+                html += f'<th class="gm {f_cls}" data-col="{i}">{gname}</th>'
+            elif pos == 'last':
+                html += f'<th class="gl {f_cls}" data-col="{i}"></th>'
+            else:  # solo
+                html += f'<th class="gs {f_cls}" data-col="{i}">{gname}</th>'
         html += '</tr>'
     
-    # ── 컬럼 헤더 행 ──
-    html += '<tr class="col-row">'
+    # ── 컬럼 행: 항상 N개 <th> ──
+    html += '<tr class="rc">'
     for i, col in enumerate(columns):
-        # 그룹 헤더가 있고, 이 컬럼이 그룹에 속하지 않으면 이미 rowspan으로 처리됨
-        if has_groups and col not in col_to_group:
-            continue
-        
-        freeze_cls = ""
-        if i < freeze_count:
-            freeze_cls = "col-freeze"
-            if i == freeze_count - 1:
-                freeze_cls += " col-freeze-last"
-        html += f'<th class="{freeze_cls}" data-col="{i}" onclick="sortTable(this)">{col} <span class="sort-arrow">▲▼</span></th>'
+        f_cls = fc(i)
+        html += f'<th class="{f_cls}" data-col="{i}" onclick="sortTable(this)">{col} <span class="sa">▲▼</span></th>'
     html += '</tr></thead><tbody>'
 
-    # ── 본문 행 ──
+    # ── 본문 ──
     for _, row in df.iterrows():
         html += '<tr>'
         for i, col in enumerate(columns):
             val = row[col]
             cell_val = "" if pd.isna(val) else str(val)
-            freeze_cls = ""
-            if i < freeze_count:
-                freeze_cls = "col-freeze"
-                if i == freeze_count - 1:
-                    freeze_cls += " col-freeze-last"
-            extra_cls = " shortfall-cell" if (col in shortfall_cols and cell_val and cell_val != "") else ""
-            html += f'<td class="{freeze_cls}{extra_cls}" data-col="{i}">{cell_val}</td>'
+            f_cls = fc(i)
+            extra = " sc" if (col in shortfall_cols and cell_val != "") else ""
+            html += f'<td class="{f_cls}{extra}" data-col="{i}">{cell_val}</td>'
         html += '</tr>'
     html += '</tbody></table></div>'
 
-    # JavaScript
+    # ── JavaScript ──
     html += f"""
     <script>
-    var FREEZE_COUNT = {freeze_count};
-    
-    function applyFreezePositions() {{
-        var table = document.getElementById("{table_id}");
-        if (!table || FREEZE_COUNT === 0) return;
-        // 컬럼 행에서 폭 측정 (col-row의 th 또는 tbody 첫 행)
-        var firstRow = table.querySelector("tbody tr");
-        if (!firstRow) return;
-        var leftPos = [];
-        var cumLeft = 0;
-        for (var i = 0; i < FREEZE_COUNT; i++) {{
-            leftPos.push(cumLeft);
-            if (firstRow.cells[i]) cumLeft += firstRow.cells[i].offsetWidth;
-        }}
-        var allCells = table.querySelectorAll(".col-freeze");
-        allCells.forEach(function(cell) {{
-            var colIdx = parseInt(cell.getAttribute("data-col"));
-            if (!isNaN(colIdx) && colIdx < leftPos.length) {{
-                cell.style.left = leftPos[colIdx] + "px";
-            }}
+    var FC = {freeze_count};
+    function applyFreeze() {{
+        var t = document.getElementById("{table_id}");
+        if (!t || FC === 0) return;
+        var fr = t.querySelector("tbody tr");
+        if (!fr) return;
+        var lp = [], cl = 0;
+        for (var i = 0; i < FC; i++) {{ lp.push(cl); if (fr.cells[i]) cl += fr.cells[i].offsetWidth; }}
+        t.querySelectorAll(".col-freeze").forEach(function(c) {{
+            var idx = parseInt(c.getAttribute("data-col"));
+            if (!isNaN(idx) && idx < lp.length) c.style.left = lp[idx] + "px";
         }});
     }}
-    
     function autoResize() {{
-        var wrap = document.getElementById("wrap_{table_id}");
+        var w = document.getElementById("wrap_{table_id}");
         if (window.frameElement) {{
-            var viewH = window.parent.innerHeight || 900;
-            var targetH = Math.min(wrap.scrollHeight + 4, Math.round(viewH * 0.85));
-            window.frameElement.style.height = targetH + "px";
+            var vh = window.parent.innerHeight || 900;
+            window.frameElement.style.height = Math.min(w.scrollHeight + 4, Math.round(vh * 0.85)) + "px";
         }}
     }}
-    
-    window.addEventListener('load', function() {{ applyFreezePositions(); autoResize(); }});
-    window.addEventListener('resize', function() {{ applyFreezePositions(); autoResize(); }});
-
-    var sortState = {{}};
+    window.addEventListener('load', function() {{ applyFreeze(); autoResize(); }});
+    window.addEventListener('resize', function() {{ applyFreeze(); autoResize(); }});
+    var ss = {{}};
     function sortTable(th) {{
-        var table = document.getElementById("{table_id}");
-        var tbody = table.querySelector("tbody");
-        var rows = Array.from(tbody.querySelectorAll("tr"));
-        var colIdx = parseInt(th.getAttribute("data-col"));
-        if (isNaN(colIdx)) return;
-
-        var asc = sortState[colIdx] !== true;
-        sortState = {{}};
-        sortState[colIdx] = asc;
-
+        var t = document.getElementById("{table_id}");
+        var tb = t.querySelector("tbody");
+        var rows = Array.from(tb.querySelectorAll("tr"));
+        var ci = parseInt(th.getAttribute("data-col"));
+        if (isNaN(ci)) return;
+        var asc = ss[ci] !== true; ss = {{}}; ss[ci] = asc;
         rows.sort(function(a, b) {{
-            var aText = a.cells[colIdx].textContent.trim();
-            var bText = b.cells[colIdx].textContent.trim();
-            var aNum = parseFloat(aText.replace(/,/g, "").replace(/[▲▼]/g, ""));
-            var bNum = parseFloat(bText.replace(/,/g, "").replace(/[▲▼]/g, ""));
-            if (aText === "" && bText === "") return 0;
-            if (aText === "") return 1;
-            if (bText === "") return -1;
-            if (!isNaN(aNum) && !isNaN(bNum)) return asc ? aNum - bNum : bNum - aNum;
-            return asc ? aText.localeCompare(bText, 'ko') : bText.localeCompare(aText, 'ko');
+            var aT = a.cells[ci].textContent.trim(), bT = b.cells[ci].textContent.trim();
+            var aN = parseFloat(aT.replace(/,/g,"")), bN = parseFloat(bT.replace(/,/g,""));
+            if (aT === "" && bT === "") return 0;
+            if (aT === "") return 1; if (bT === "") return -1;
+            if (!isNaN(aN) && !isNaN(bN)) return asc ? aN - bN : bN - aN;
+            return asc ? aT.localeCompare(bT,'ko') : bT.localeCompare(aT,'ko');
         }});
-        rows.forEach(function(r) {{ tbody.appendChild(r); }});
-        
-        // 모든 헤더 행의 정렬 화살표 업데이트
-        table.querySelectorAll("thead th").forEach(function(h) {{
-            var hIdx = parseInt(h.getAttribute("data-col"));
-            var arrow = h.querySelector(".sort-arrow");
-            if (!arrow) return;
-            if (hIdx === colIdx) {{
-                arrow.textContent = asc ? "▲" : "▼";
-                arrow.className = "sort-arrow active";
-            }} else {{
-                arrow.textContent = "▲▼";
-                arrow.className = "sort-arrow";
-            }}
+        rows.forEach(function(r) {{ tb.appendChild(r); }});
+        t.querySelectorAll("thead th").forEach(function(h) {{
+            var ar = h.querySelector(".sa"); if (!ar) return;
+            var hi = parseInt(h.getAttribute("data-col"));
+            if (hi === ci) {{ ar.textContent = asc ? "▲" : "▼"; ar.className = "sa active"; }}
+            else {{ ar.textContent = "▲▼"; ar.className = "sa"; }}
         }});
         setTimeout(autoResize, 50);
     }}
