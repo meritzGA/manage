@@ -14,7 +14,6 @@ CONFIG_FILE = "app_config.pkl"
 # 1. 설정 및 데이터 영구 저장/불러오기 함수
 # ==========================================
 def load_data_and_config():
-    """서버에 저장된 데이터와 관리자 설정을 불러옵니다."""
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, 'rb') as f:
@@ -25,10 +24,9 @@ def load_data_and_config():
                 st.session_state['admin_goals'] = data.get('admin_goals', {})
                 st.session_state['admin_categories'] = data.get('admin_categories', [])
         except:
-            pass # 파일이 깨진 경우 무시
+            pass 
 
 def save_data_and_config():
-    """현재 데이터와 관리자 설정을 서버에 영구 저장합니다."""
     data = {
         'df_merged': st.session_state.get('df_merged', pd.DataFrame()),
         'manager_col': st.session_state.get('manager_col', ""),
@@ -39,7 +37,6 @@ def save_data_and_config():
     with open(CONFIG_FILE, 'wb') as f:
         pickle.dump(data, f)
 
-# 세션이 초기화된 상태라면 파일에서 불러오기
 if 'df_merged' not in st.session_state:
     st.session_state['df_merged'] = pd.DataFrame()
     st.session_state['manager_col'] = ""
@@ -92,17 +89,15 @@ if menu == "관리자 화면 (설정)":
     
     st.header("1. 데이터 파일 업로드 및 관리")
     
-    # 이미 데이터가 업로드 되어 있는 경우
     if not st.session_state['df_merged'].empty:
         st.success(f"✅ 현재 **{len(st.session_state['df_merged'])}행**의 데이터가 저장되어 운영 중입니다.")
-        st.markdown("새로운 달의 데이터를 올리시려면 아래 버튼을 눌러 기존 데이터를 삭제해주세요. (표시 항목 등의 설정은 유지됩니다)")
+        st.markdown("새로운 달의 데이터를 올리시려면 아래 버튼을 눌러 기존 데이터를 삭제해주세요.")
         
         if st.button("🗑️ 기존 파일 데이터 삭제"):
             st.session_state['df_merged'] = pd.DataFrame()
-            save_data_and_config() # 삭제 상태 저장
+            save_data_and_config()
             st.rerun()
     
-    # 데이터가 없는 경우 (업로드 화면 표시)
     else:
         col_file1, col_file2 = st.columns(2)
         with col_file1:
@@ -135,7 +130,7 @@ if menu == "관리자 화면 (설정)":
                             
                             df_merged = pd.merge(df1, df2, left_on='merge_key1', right_on='merge_key2', how='outer', suffixes=('_파일1', '_파일2'))
                             st.session_state['df_merged'] = df_merged
-                            save_data_and_config() # 병합 완료 후 영구 저장
+                            save_data_and_config()
                             st.success(f"데이터 병합 완료! 총 {len(df_merged)}행의 데이터가 안전하게 저장되었습니다.")
                             st.rerun()
             except Exception as e:
@@ -143,7 +138,6 @@ if menu == "관리자 화면 (설정)":
 
     st.divider()
 
-    # 데이터가 있을 때만 설정 화면 노출
     if not st.session_state['df_merged'].empty:
         df = st.session_state['df_merged']
         available_columns = [c for c in df.columns if c not in ['merge_key1', 'merge_key2']]
@@ -310,6 +304,7 @@ elif menu == "매니저 화면 (로그인)":
             
             display_cols = []
             
+            # 1. 항목 표시 및 필터 적용
             for item in st.session_state['admin_cols']:
                 col_name = item['col']
                 display_cols.append(col_name)
@@ -322,6 +317,7 @@ elif menu == "매니저 화면 (로그인)":
                     except Exception as e:
                         pass
             
+            # 2. 목표 구간 처리
             for g_col, tiers in st.session_state['admin_goals'].items():
                 if g_col in my_df.columns:
                     my_df[g_col] = pd.to_numeric(my_df[g_col], errors='coerce').fillna(0)
@@ -337,6 +333,7 @@ elif menu == "매니저 화면 (로그인)":
                     if f'{g_col}_다음목표' not in display_cols:
                         display_cols.extend([f'{g_col}_다음목표', f'{g_col}_부족금액'])
 
+            # 3. 맞춤형 분류(태그) 설정
             if st.session_state['admin_categories']:
                 if '맞춤분류' not in my_df.columns:
                     my_df['맞춤분류'] = ""
@@ -367,6 +364,31 @@ elif menu == "매니저 화면 (로그인)":
                 if '맞춤분류' not in display_cols:
                     display_cols.insert(0, '맞춤분류')
             
+            # ---------------------------------------------------------
+            # ⭐ [신규 추가] 다중 정렬 로직 (1.분류 / 2.지사명 / 3.성별(성명))
+            # ---------------------------------------------------------
+            sort_keys = []
+            
+            # 1순위: 맞춤분류 (태그)
+            if '맞춤분류' in my_df.columns:
+                sort_keys.append('맞춤분류')
+                
+            # 2순위: 지사명 (컬럼 이름에 '지사명'이 들어간 첫 번째 열)
+            ji_cols = [c for c in my_df.columns if '지사명' in c]
+            if ji_cols:
+                sort_keys.append(ji_cols[0])
+                
+            # 3순위: 성별 또는 성명/설계사명 (컬럼 이름에 포함된 첫 번째 열)
+            gender_name_cols = [c for c in my_df.columns if '성별' in c or '설계사명' in c or '성명' in c]
+            if gender_name_cols:
+                sort_keys.append(gender_name_cols[0])
+                
+            # 정렬 키가 하나라도 모였으면 정렬 수행 (모두 오름차순/가나다순)
+            if sort_keys:
+                my_df = my_df.sort_values(by=sort_keys, ascending=[True] * len(sort_keys))
+            # ---------------------------------------------------------
+            
+            # 최종 컬럼 중복 제거 및 디스플레이
             final_cols = list(dict.fromkeys(display_cols))
             
             if not final_cols:
