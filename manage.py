@@ -214,9 +214,32 @@ def render_html_table(df):
     table_id = f"perf_{uuid.uuid4().hex[:8]}"
     shortfall_cols = set(c for c in df.columns if '부족금액' in c)
 
-    html = f'<div class="perf-table-wrap"><table class="perf-table" id="{table_id}"><thead><tr>'
+    # iframe 내부에서 독립 렌더링되므로 CSS를 직접 포함
+    html = f"""
+    <style>
+    @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+    body {{ margin: 0; padding: 0; font-family: 'Pretendard', -apple-system, 'Noto Sans KR', sans-serif; }}
+    .perf-table-wrap {{ width: 100%; overflow-x: auto; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.08); }}
+    .perf-table {{ width: 100%; border-collapse: collapse; font-size: 14px; white-space: nowrap; }}
+    .perf-table thead th {{
+        background-color: #4e5968; color: #ffffff; font-weight: 700;
+        text-align: center; padding: 10px 14px; border: 1px solid #3d4654;
+        position: sticky; top: 0; z-index: 1;
+        cursor: pointer; user-select: none;
+    }}
+    .perf-table thead th:hover {{ background-color: #3d4654; }}
+    .perf-table thead th .sort-arrow {{ margin-left: 4px; font-size: 11px; opacity: 0.5; }}
+    .perf-table thead th .sort-arrow.active {{ opacity: 1; }}
+    .perf-table tbody td {{ text-align: center; padding: 8px 12px; border: 1px solid #e5e8eb; }}
+    .perf-table tbody tr:nth-child(even) {{ background-color: #f7f8fa; }}
+    .perf-table tbody tr:hover {{ background-color: #eef1f6; }}
+    .shortfall-cell {{ color: rgb(128, 0, 0); font-weight: 700; }}
+    </style>
+    """
+
+    html += f'<div class="perf-table-wrap"><table class="perf-table" id="{table_id}"><thead><tr>'
     for col in df.columns:
-        html += f'<th onclick="sortTable_{table_id}(this)">{col} <span class="sort-arrow">▲▼</span></th>'
+        html += f'<th onclick="sortTable(this)">{col} <span class="sort-arrow">▲▼</span></th>'
     html += '</tr></thead><tbody>'
 
     for _, row in df.iterrows():
@@ -234,52 +257,46 @@ def render_html_table(df):
     # JavaScript: 헤더 클릭 시 오름차순/내림차순 토글 정렬
     html += f"""
     <script>
-    (function() {{
-        var sortState_{table_id} = {{}};
-        window.sortTable_{table_id} = function(th) {{
-            var table = document.getElementById("{table_id}");
-            var tbody = table.querySelector("tbody");
-            var rows = Array.from(tbody.querySelectorAll("tr"));
-            var headers = Array.from(table.querySelectorAll("thead th"));
-            var colIdx = headers.indexOf(th);
-            if (colIdx < 0) return;
+    var sortState = {{}};
+    function sortTable(th) {{
+        var table = document.getElementById("{table_id}");
+        var tbody = table.querySelector("tbody");
+        var rows = Array.from(tbody.querySelectorAll("tr"));
+        var headers = Array.from(table.querySelectorAll("thead th"));
+        var colIdx = headers.indexOf(th);
+        if (colIdx < 0) return;
 
-            // 정렬 방향 토글 (true=오름차순, false=내림차순)
-            var asc = sortState_{table_id}[colIdx] !== true;
-            sortState_{table_id} = {{}};
-            sortState_{table_id}[colIdx] = asc;
+        var asc = sortState[colIdx] !== true;
+        sortState = {{}};
+        sortState[colIdx] = asc;
 
-            rows.sort(function(a, b) {{
-                var aText = a.cells[colIdx].textContent.trim();
-                var bText = b.cells[colIdx].textContent.trim();
-                // 콤마 제거 후 숫자 비교 시도
-                var aNum = parseFloat(aText.replace(/,/g, ""));
-                var bNum = parseFloat(bText.replace(/,/g, ""));
-                // 빈 문자열은 항상 맨 뒤로
-                if (aText === "" && bText === "") return 0;
-                if (aText === "") return 1;
-                if (bText === "") return -1;
-                if (!isNaN(aNum) && !isNaN(bNum)) {{
-                    return asc ? aNum - bNum : bNum - aNum;
-                }}
-                return asc ? aText.localeCompare(bText, 'ko') : bText.localeCompare(aText, 'ko');
-            }});
+        rows.sort(function(a, b) {{
+            var aText = a.cells[colIdx].textContent.trim();
+            var bText = b.cells[colIdx].textContent.trim();
+            var aNum = parseFloat(aText.replace(/,/g, "").replace(/▲|▼/g, ""));
+            var bNum = parseFloat(bText.replace(/,/g, "").replace(/▲|▼/g, ""));
+            if (aText === "" && bText === "") return 0;
+            if (aText === "") return 1;
+            if (bText === "") return -1;
+            if (!isNaN(aNum) && !isNaN(bNum)) {{
+                return asc ? aNum - bNum : bNum - aNum;
+            }}
+            return asc ? aText.localeCompare(bText, 'ko') : bText.localeCompare(aText, 'ko');
+        }});
 
-            rows.forEach(function(r) {{ tbody.appendChild(r); }});
+        rows.forEach(function(r) {{ tbody.appendChild(r); }});
 
-            // 화살표 표시 업데이트
-            headers.forEach(function(h, i) {{
-                var arrow = h.querySelector(".sort-arrow");
-                if (i === colIdx) {{
-                    arrow.textContent = asc ? "▲" : "▼";
-                    arrow.className = "sort-arrow active";
-                }} else {{
-                    arrow.textContent = "▲▼";
-                    arrow.className = "sort-arrow";
-                }}
-            }});
-        }};
-    }})();
+        headers.forEach(function(h, i) {{
+            var arrow = h.querySelector(".sort-arrow");
+            if (i === colIdx) {{
+                arrow.textContent = asc ? "▲" : "▼";
+                arrow.className = "sort-arrow active";
+            }} else {{
+                arrow.textContent = "▲▼";
+                arrow.className = "sort-arrow";
+            }}
+        }});
+    }}
     </script>
     """
     return html
@@ -629,4 +646,8 @@ elif menu == "매니저 화면 (로그인)":
                         final_df[c] = final_df[c].apply(format_with_comma_and_hide_zero)
                 
                 # 6. ★ HTML 테이블로 렌더링 (짙은 회색 헤더 + 흰색 글씨 + 가운데 정렬)
-                st.markdown(render_html_table(final_df), unsafe_allow_html=True)
+                import streamlit.components.v1 as components
+                table_html = render_html_table(final_df)
+                # 행 수 기반 높이 자동 계산 (헤더 45px + 행당 38px + 여유 20px)
+                table_height = min(45 + len(final_df) * 38 + 20, 2000)
+                components.html(table_html, height=table_height, scrolling=True)
