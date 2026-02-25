@@ -249,6 +249,7 @@ def load_data_and_config():
     st.session_state['merge_key2_col'] = str(cfg.get('merge_key2_col', ''))
     st.session_state['col_groups'] = cfg.get('col_groups', []) if isinstance(cfg.get('col_groups'), list) else []
     st.session_state['data_date'] = str(cfg.get('data_date', ''))
+    st.session_state['clip_footer'] = str(cfg.get('clip_footer', ''))
     for item in st.session_state['admin_cols']:
         if 'fallback_col' not in item: item['fallback_col'] = ''
     
@@ -275,6 +276,7 @@ def _reset_session_state():
     st.session_state['merge_key2_col'] = ''
     st.session_state['col_groups'] = []
     st.session_state['data_date'] = ''
+    st.session_state['clip_footer'] = ''
 
 def has_data():
     df = st.session_state.get('df_merged', None)
@@ -294,6 +296,7 @@ def save_config():
         'merge_key2_col': st.session_state.get('merge_key2_col', ''),
         'col_groups': st.session_state.get('col_groups', []),
         'data_date': st.session_state.get('data_date', ''),
+        'clip_footer': st.session_state.get('clip_footer', ''),
     }
     try:
         if os.path.exists(CONFIG_FILE):
@@ -613,6 +616,32 @@ def render_html_table(df, col_groups=None):
     .m-label {{ color: #6b7684; font-weight: 500; flex-shrink: 0; margin-right: 12px; }}
     .m-val {{ color: #191f28; font-weight: 600; text-align: right; }}
     .m-row.m-sc .m-val {{ color: rgb(128,0,0); font-weight: 800; }}
+    
+    /* 복사 버튼 */
+    .m-copy-wrap {{
+        padding: 10px 14px 6px; text-align: center;
+    }}
+    .m-copy-btn {{
+        width: 100%; padding: 10px; border: none; border-radius: 10px;
+        background: linear-gradient(135deg, #FEE500 0%, #F5D600 100%);
+        color: #3C1E1E; font-size: 14px; font-weight: 700;
+        cursor: pointer; transition: all 0.2s;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+    }}
+    .m-copy-btn:active {{ transform: scale(0.97); }}
+    .m-copy-btn.copied {{
+        background: linear-gradient(135deg, #22C55E 0%, #16A34A 100%);
+        color: #fff;
+    }}
+    /* 데스크톱 행 복사 버튼 */
+    .d-copy-btn {{
+        border: none; border-radius: 6px; padding: 4px 10px;
+        background: #FEE500; color: #3C1E1E;
+        font-size: 12px; font-weight: 700; cursor: pointer;
+        white-space: nowrap; transition: all 0.15s;
+    }}
+    .d-copy-btn:hover {{ background: #F5D600; }}
+    .d-copy-btn.copied {{ background: #22C55E; color: #fff; }}
     </style>
     """
 
@@ -643,9 +672,8 @@ def render_html_table(df, col_groups=None):
                 # 가운데 셀에만 텍스트 표시
                 text = gname if is_text else ""
                 html += f'<th class="{b_cls} {f_cls}" style="background:{gc};" data-col="{i}">{text}</th>'
+        html += '<th class="ge" data-col="-1"></th>'  # 복사 열 (빈 그룹)
         html += '</tr>'
-    
-    # ── 컬럼 행: 항상 N개 <th> ──
     html += '<tr class="rc">'
     for i, col in enumerate(columns):
         f_cls = fc(i)
@@ -656,10 +684,11 @@ def render_html_table(df, col_groups=None):
         else:
             bar = ''
         html += f'<th class="{f_cls}" data-col="{i}" onclick="sortTable(this)">{bar}{col} <span class="sa">▲▼</span></th>'
+    html += '<th data-col="-1" style="min-width:50px; cursor:default;">복사</th>'
     html += '</tr></thead><tbody>'
 
     # ── 본문 ──
-    for _, row in df.iterrows():
+    for row_idx, (_, row) in enumerate(df.iterrows()):
         html += '<tr>'
         for i, col in enumerate(columns):
             val = row[col]
@@ -667,13 +696,14 @@ def render_html_table(df, col_groups=None):
             f_cls = fc(i)
             extra = " sc" if (col in shortfall_cols and cell_val != "") else ""
             html += f'<td class="{f_cls}{extra}" data-col="{i}">{cell_val}</td>'
+        html += f'<td data-col="-1"><button class="d-copy-btn" onclick="copyClip({row_idx}, this, event)">📋</button></td>'
         html += '</tr>'
     html += '</tbody></table></div>'
     # ── END desktop table ──
     html += '</div>'  # close .desktop-view
     
     # ══════════════════════════════════════════
-    # 📱 모바일 카드 뷰 생성
+    # 📋 각 행별 클립보드 텍스트 생성 (데스크톱/모바일 공용)
     # ══════════════════════════════════════════
     columns = list(df.columns)
     
@@ -685,24 +715,126 @@ def render_html_table(df, col_groups=None):
             name_col = c
             break
     
+    # 식별 열 vs 데이터 열 분류
+    # 카톡 이름줄: 지사명 + 설계사명 딱 2개만
+    clip_name_keywords = ['지사', '설계사명', '성명', '이름', '팀장명']
+    goal_keywords = ['다음목표', '부족금액']
+    
+    clip_name_cols = []
+    data_cols = []
+    for c in columns:
+        if c == '순번' or c == '맞춤분류':
+            continue
+        if any(kw in c for kw in goal_keywords):
+            data_cols.append(c)
+        elif any(kw in c for kw in clip_name_keywords) and '코드' not in c and '번호' not in c:
+            clip_name_cols.append(c)
+        else:
+            data_cols.append(c)
+    
     # 그룹별 열 매핑
     col_to_grp = {}
     for grp in col_groups:
         for c in grp['cols']:
             col_to_grp[c] = grp['name']
     
+    # 기준일 / 인사말
+    import json as _json
+    data_date = ''
+    clip_footer = ''
+    try:
+        data_date = st.session_state.get('data_date', '')
+        clip_footer = st.session_state.get('clip_footer', '')
+    except Exception:
+        pass
+    if not clip_footer.strip():
+        clip_footer = "팀장님! 시상 부족금액 안내드려요!\n부족한 거 챙겨서 꼭 시상 많이 받아 가셨으면 좋겠습니다!\n좋은 하루 되세요!"
+    
+    clip_texts = []
+    for row_idx, (_, row) in enumerate(df.iterrows()):
+        # 인적사항 조합: 대리점명 + 이름 + "팀장님"
+        name_parts = []
+        for c in clip_name_cols:
+            v = str(row[c]) if not pd.isna(row[c]) else ''
+            if v.strip() and v != '0':
+                name_parts.append(v.strip())
+        person_line = ' '.join(name_parts)
+        if person_line and not person_line.endswith('님'):
+            person_line += ' 팀장님'
+        
+        lines = []
+        lines.append("📋 메리츠 시상 현황 안내")
+        if data_date:
+            lines.append(f"📅 기준일: {data_date}")
+        lines.append("")
+        lines.append(f"👤 {person_line}")
+        lines.append("")
+        
+        current_group = None
+        for c in data_cols:
+            # 코드 열은 카톡 복사에서 제외
+            if '코드' in c or '번호' in c:
+                continue
+            val = str(row[c]) if not pd.isna(row[c]) else ''
+            if not val.strip() or val == '0':
+                continue
+            
+            grp = col_to_grp.get(c)
+            is_goal = any(kw in c for kw in goal_keywords)
+            
+            if grp and grp != current_group:
+                if current_group is not None:
+                    lines.append("")
+                lines.append(f"━━ {grp} ━━")
+                current_group = grp
+            elif grp is None and not is_goal and current_group is not None:
+                # 일반 데이터 열이 그룹 밖으로 나가면 구분선
+                lines.append("")
+                current_group = None
+            # is_goal이면 이전 그룹 유지 (구분선 삽입 안 함)
+            
+            if '부족금액' in c:
+                lines.append(f"🔴 {c}: {val}")
+            elif '다음목표' in c:
+                lines.append(f"🎯 {c}: {val}")
+            else:
+                lines.append(f"  {c}: {val}")
+        
+        # 인사말 추가
+        if clip_footer:
+            lines.append("")
+            lines.append(clip_footer)
+        
+        clip_texts.append('\n'.join(lines))
+    
+    # JS 안전하게 전달 — HTML-safe base64 인코딩
+    import base64 as _b64
+    clip_json_bytes = _json.dumps(clip_texts, ensure_ascii=False).encode('utf-8')
+    clip_b64 = _b64.b64encode(clip_json_bytes).decode('ascii')
+    
+    # ══════════════════════════════════════════
+    # 📱 모바일 카드 뷰 생성
+    # ══════════════════════════════════════════
     html += '<div class="mobile-view">'
     
     for row_idx, (_, row) in enumerate(df.iterrows()):
-        # 카드 제목: 순번 + 이름
-        name_val = str(row.get(name_col, '')) if name_col else ''
+        # 인적사항 조합
+        name_parts_card = []
+        for c in clip_name_cols:
+            v = str(row[c]) if not pd.isna(row[c]) else ''
+            if v.strip() and v != '0':
+                name_parts_card.append(v.strip())
+        person_card = ' '.join(name_parts_card) if name_parts_card else ''
+        
+        # 이름만 추출 (카드 헤더 굵은 글씨용)
+        name_val = str(row.get(name_col, '')) if name_col else (person_card or '')
         num_val = str(row.get('순번', row_idx + 1)) if '순번' in columns else str(row_idx + 1)
         
-        html += f'<div class="m-card" onclick="this.classList.toggle(\'open\')">'
+        html += f'<div class="m-card">'
         
-        # 카드 헤더: 이름 + 핵심 요약
+        # 카드 헤더: 이름 + 요약 배지
         summary_items = []
-        for c in columns:
+        for c in data_cols:
             if '부족금액' in c:
                 v = str(row[c]) if not pd.isna(row[c]) else ''
                 if v and v != '0' and v.strip():
@@ -713,31 +845,41 @@ def render_html_table(df, col_groups=None):
                     summary_items.append(f'<span class="m-goal">{v}</span>')
         summary = ' '.join(summary_items)
         
-        html += f'<div class="m-card-head"><span class="m-num">{num_val}</span><span class="m-name">{name_val}</span>'
+        html += f'<div class="m-card-head" onclick="this.parentElement.classList.toggle(\'open\')">'
+        html += f'<span class="m-num">{num_val}</span><span class="m-name">{name_val}</span>'
         if summary:
             html += f'<span class="m-summary">{summary}</span>'
         html += '<span class="m-chevron">&#9660;</span></div>'
         
-        # 카드 본문 (접혀있음, 클릭 시 열림)
+        # 카드 본문
         html += '<div class="m-card-body">'
         
-        current_group = None
-        skip_cols = {'순번', name_col} if name_col else {'순번'}
+        # 📋 복사 버튼
+        html += f'<div class="m-copy-wrap"><button class="m-copy-btn" onclick="copyClip({row_idx}, this, event)">📋 카톡 보내기</button></div>'
         
-        for c in columns:
-            if c in skip_cols:
+        # 인적사항 (이름 외 추가 정보)
+        for c in clip_name_cols:
+            if c == name_col:
                 continue
+            val = str(row[c]) if not pd.isna(row[c]) else ''
+            if val.strip() and val != '0':
+                html += f'<div class="m-row"><span class="m-label">{c}</span><span class="m-val">{val}</span></div>'
+        
+        # 실적 데이터
+        current_group = None
+        for c in data_cols:
             val = str(row[c]) if not pd.isna(row[c]) else ''
             if not val.strip() or val == '0':
                 continue
             
-            # 그룹 구분선
             grp = col_to_grp.get(c)
+            is_goal = any(kw in c for kw in goal_keywords)
+            
             if grp and grp != current_group:
                 gc = group_color_map.get(grp, '#4e5968')
                 html += f'<div class="m-grp-label" style="border-left:3px solid {gc}; padding-left:8px;">{grp}</div>'
                 current_group = grp
-            elif not grp and current_group is not None:
+            elif grp is None and not is_goal and current_group is not None:
                 current_group = None
             
             extra_cls = ' m-sc' if c in shortfall_cols else ''
@@ -746,14 +888,137 @@ def render_html_table(df, col_groups=None):
         html += '</div></div>'  # m-card-body, m-card
     
     html += '</div>'  # mobile-view
+    
+    # ── 복사 팝업 오버레이 (iframe 내부) ──
+    html += """
+    <div id="clip-overlay" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0;
+        background:rgba(0,0,0,0.5); z-index:99999; justify-content:center; align-items:center; padding:20px;"
+        onclick="if(event.target===this){this.style.display='none';}">
+        <div style="background:#fff; border-radius:16px; padding:20px; width:100%;
+            max-width:500px; max-height:70vh; box-shadow:0 10px 40px rgba(0,0,0,0.3);">
+            <h3 style="margin:0 0 10px; font-size:16px;">📋 아래 텍스트를 복사하세요</h3>
+            <textarea id="clip-ta" style="width:100%; height:200px; border:1px solid #ddd; border-radius:8px;
+                padding:10px; font-size:14px; resize:none; font-family:inherit; box-sizing:border-box;"></textarea>
+            <button id="clip-copy-btn" onclick="doCopyOverlay()" style="margin-top:10px; width:100%; padding:12px;
+                border:none; border-radius:10px; font-size:15px; font-weight:700; cursor:pointer;
+                background:#FEE500; color:#3C1E1E;">📋 복사하기</button>
+            <button onclick="document.getElementById('clip-overlay').style.display='none'" style="margin-top:6px;
+                width:100%; padding:12px; border:none; border-radius:10px; font-size:15px; font-weight:700;
+                cursor:pointer; background:#f2f4f6; color:#333;">닫기</button>
+        </div>
+    </div>
+    """
 
     # ── JavaScript ──
     html += f"""
     <script>
     var FC_DESKTOP = {freeze_count};
     var FC = FC_DESKTOP;
+    var clipData = JSON.parse(decodeURIComponent(escape(atob("{clip_b64}"))));
     
     function isMobile() {{ return window.innerWidth <= 768; }}
+    
+    function copyClip(idx, btn, evt) {{
+        evt.stopPropagation();
+        var text = clipData[idx];
+        if (!text) return;
+        
+        // 📱 모바일: 네이티브 공유 (카톡 직접 선택 가능)
+        if (isMobile() && navigator.share) {{
+            navigator.share({{ text: text }}).then(function() {{
+                showCopied(btn);
+            }}).catch(function() {{
+                fallbackCopy(text, btn);
+            }});
+            return;
+        }}
+        
+        // 🖥️ PC: 동일 클릭 이벤트 내에서 즉시 복사 시도
+        fallbackCopy(text, btn);
+    }}
+    function fallbackCopy(text, btn) {{
+        // 방법 1: 임시 textarea + execCommand (user gesture 내)
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        ta.setSelectionRange(0, 999999);
+        var ok = false;
+        try {{ ok = document.execCommand('copy'); }} catch(e) {{}}
+        document.body.removeChild(ta);
+        
+        if (ok) {{
+            showCopied(btn);
+            return;
+        }}
+        
+        // 방법 2: Clipboard API
+        if (navigator.clipboard && navigator.clipboard.writeText) {{
+            navigator.clipboard.writeText(text).then(function() {{
+                showCopied(btn);
+            }}).catch(function() {{
+                showOverlay(text);
+            }});
+            return;
+        }}
+        
+        // 방법 3: 오버레이 (수동 복사)
+        showOverlay(text);
+    }}
+    function showOverlay(text) {{
+        var ov = document.getElementById('clip-overlay');
+        var ta = document.getElementById('clip-ta');
+        ta.value = text;
+        ov.style.display = 'flex';
+        setTimeout(function() {{ ta.focus(); ta.select(); ta.setSelectionRange(0, 999999); }}, 100);
+    }}
+    function doCopyOverlay() {{
+        var ta = document.getElementById('clip-ta');
+        var text = ta.value;
+        
+        // 임시 textarea로 복사 (오버레이 textarea 대신 새로 만들어서)
+        var tmp = document.createElement('textarea');
+        tmp.value = text;
+        tmp.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
+        document.body.appendChild(tmp);
+        tmp.focus();
+        tmp.select();
+        tmp.setSelectionRange(0, 999999);
+        var ok = false;
+        try {{ ok = document.execCommand('copy'); }} catch(e) {{}}
+        document.body.removeChild(tmp);
+        
+        if (!ok) {{
+            // 원래 textarea로도 시도
+            ta.readOnly = false;
+            ta.focus(); ta.select(); ta.setSelectionRange(0, 999999);
+            try {{ ok = document.execCommand('copy'); }} catch(e2) {{}}
+            ta.readOnly = true;
+        }}
+        
+        var btn = document.getElementById('clip-copy-btn');
+        btn.textContent = ok ? '✅ 복사 완료!' : '⚠️ 텍스트를 직접 선택 후 Ctrl+C';
+        btn.style.background = ok ? '#22C55E' : '#f59e0b'; btn.style.color = '#fff';
+        if (ok) {{
+            setTimeout(function() {{
+                document.getElementById('clip-overlay').style.display = 'none';
+                btn.textContent = '📋 복사하기';
+                btn.style.background = '#FEE500'; btn.style.color = '#3C1E1E';
+            }}, 1200);
+        }} else {{
+            // 실패 시 textarea를 편집 가능하게 열어두고 선택 상태 유지
+            ta.readOnly = false;
+            ta.focus(); ta.select(); ta.setSelectionRange(0, 999999);
+        }}
+    }}
+    function showCopied(btn) {{
+        var orig = btn.innerHTML;
+        btn.classList.add('copied');
+        btn.innerHTML = '✅ 복사 완료!';
+        setTimeout(function() {{ btn.classList.remove('copied'); btn.innerHTML = orig; }}, 1500);
+    }}
     
     function applyFreeze() {{
         var t = document.getElementById("{table_id}");
@@ -1022,12 +1287,18 @@ if menu == "관리자 화면 (설정)":
         available_columns = [c for c in df.columns if c not in ['merge_key1', 'merge_key2', '_unified_search_key']]
         
         # ========================================
-        st.header("2. 📅 데이터 기준일 설정")
-        with st.form("date_form"):
+        st.header("2. 📅 기준일 및 카톡 복사 문구 설정")
+        with st.form("date_footer_form"):
             current_date = st.session_state.get('data_date', '')
-            new_date = st.text_input("조회 화면에 표시할 기준일 (예: 2025.02.24)", value=current_date)
+            new_date = st.text_input("데이터 기준일 (예: 2026.02.24)", value=current_date)
+            
+            default_footer = "팀장님! 시상 부족금액 안내드려요!\n부족한 거 챙겨서 꼭 시상 많이 받아 가셨으면 좋겠습니다!\n좋은 하루 되세요!"
+            current_footer = st.session_state.get('clip_footer', '') or default_footer
+            new_footer = st.text_area("카톡 하단 인사말 (줄바꿈 가능)", value=current_footer, height=100)
+            
             if st.form_submit_button("저장"):
                 st.session_state['data_date'] = new_date
+                st.session_state['clip_footer'] = new_footer
                 save_data_and_config()
                 st.rerun()
         
@@ -1463,6 +1734,7 @@ elif menu == "매니저 화면 (로그인)":
                 # 6. ★ HTML 테이블로 렌더링 (틀 고정 + 그룹 헤더 + 정렬 + 반응형)
                 col_groups = st.session_state.get('col_groups', [])
                 table_html = render_html_table(final_df, col_groups=col_groups)
+                
                 # 테이블 내부 스크롤 사용 — iframe 높이는 뷰포트 85%로 제한
                 components.html(table_html, height=800, scrolling=False)
           except Exception as e:
