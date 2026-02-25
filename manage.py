@@ -1405,7 +1405,7 @@ if st.session_state.get('admin_authenticated', False) and menu == "관리자 화
 if menu == "관리자 화면 (설정)":
     st.title("⚙️ 관리자 설정 화면")
     
-    ADMIN_PASSWORD = "meritz0085"
+    ADMIN_PASSWORD = "wolf7998"
     
     if not st.session_state.get('admin_authenticated', False):
         with st.form("admin_login_form"):
@@ -2198,3 +2198,4 @@ elif menu == "매니저 화면 (로그인)":
           except Exception as e:
             st.error(f"데이터 처리 중 오류가 발생했습니다: {e}")
             st.info("관리자 화면에서 설정을 확인해주세요.")
+
