@@ -213,7 +213,6 @@ def load_data_and_config():
             if isinstance(old, dict) and 'df_merged' in old:
                 df = old['df_merged']
                 if isinstance(df, pd.DataFrame) and not df.empty:
-                    # DataFrame을 DATA_FILE로 분리
                     with open(DATA_FILE, 'wb') as f:
                         pickle.dump({'df_merged': df}, f)
         except Exception:
@@ -337,9 +336,18 @@ def _safe_float_prize(val):
     try: return float(s)
     except: return 0.0
 
+# ★ 수정: outer merge 시 NaN 행을 건너뛰고 첫 번째 유효 값을 반환하는 헬퍼
+def _first_valid(df, col):
+    """지정 열에서 NaN이 아닌 첫 번째 값을 반환. 없으면 0."""
+    if not col or col not in df.columns:
+        return 0
+    s = df[col].dropna()
+    return s.values[0] if not s.empty else 0
+
 def _read_prize_items_app(cfg, match_df):
     """설정에서 시상금 항목들을 읽어 [{label, amount}] 리스트 반환.
-    지급률(col_eligible)=0이면 미대상으로 제외, 그 외 값이면 대상으로 포함. 공란이면 무조건 포함."""
+    지급률(col_eligible)=0이면 미대상으로 제외, 그 외 값이면 대상으로 포함. 공란이면 무조건 포함.
+    ★ 수정: outer merge로 NaN 행이 섞일 수 있으므로 dropna()로 유효 값 우선 사용."""
     prize_details = []
     items = cfg.get('prize_items', [])
     if items:
@@ -349,27 +357,32 @@ def _read_prize_items_app(cfg, match_df):
             if not col_prize or col_prize not in match_df.columns:
                 continue
             
-            # 대상 여부 확인
+            # 대상 여부 확인 — ★ dropna() 적용
             col_elig = item.get('col_eligible', '')
             if col_elig and col_elig in match_df.columns:
-                elig_val = _safe_float_prize(match_df[col_elig].values[0])
+                elig_series = match_df[col_elig].dropna()
+                elig_val = _safe_float_prize(elig_series.values[0]) if not elig_series.empty else 0
                 if elig_val == 0:
                     continue
             
-            raw = match_df[col_prize].values[0]
+            # 시상금 읽기 — ★ dropna() 적용
+            prize_series = match_df[col_prize].dropna()
+            raw = prize_series.values[0] if not prize_series.empty else 0
             amt = _safe_float_prize(raw)
             prize_details.append({"label": label or col_prize, "amount": amt})
     else:
         col_prize = cfg.get('col_prize', '')
         if col_prize and col_prize in match_df.columns:
-            raw = match_df[col_prize].values[0]
+            prize_series = match_df[col_prize].dropna()
+            raw = prize_series.values[0] if not prize_series.empty else 0
             amt = _safe_float_prize(raw)
             if amt != 0:
                 prize_details.append({"label": "시상금", "amount": amt})
     return prize_details
 
 def calculate_prize_for_code(target_code, prize_config, df_src):
-    """특정 사번의 시상금을 df_merged에서 직접 읽기"""
+    """특정 사번의 시상금을 df_merged에서 직접 읽기
+    ★ 수정: 브릿지/구간 실적 값도 _first_valid()로 NaN 행 건너뜀"""
     if not prize_config or df_src is None or df_src.empty:
         return [], 0
     results = []
@@ -397,14 +410,15 @@ def calculate_prize_for_code(target_code, prize_config, df_src):
         if cat == 'weekly':
             if "1기간" in p_type:
                 if not prize_details: continue  # 미대상 → 항목 자체 미표시
-                raw_prev = match_df[cfg['col_val_prev']].values[0] if cfg.get('col_val_prev') and cfg['col_val_prev'] in df_src.columns else 0
-                raw_curr = match_df[cfg['col_val_curr']].values[0] if cfg.get('col_val_curr') and cfg['col_val_curr'] in df_src.columns else 0
-                val_prev, val_curr = _safe_float_prize(raw_prev), _safe_float_prize(raw_curr)
+                # ★ 수정: _first_valid()로 NaN 행 건너뜀
+                val_prev = _safe_float_prize(_first_valid(match_df, cfg.get('col_val_prev', '')))
+                val_curr = _safe_float_prize(_first_valid(match_df, cfg.get('col_val_curr', '')))
                 results.append({"name": cfg['name'], "category": "weekly", "type": "브릿지1",
                     "val_prev": val_prev, "val_curr": val_curr, "prize": prize, "prize_details": prize_details})
+
             elif "2기간" in p_type:
-                raw_curr = match_df[cfg['col_val_curr']].values[0] if cfg.get('col_val_curr') and cfg['col_val_curr'] in df_src.columns else 0
-                val_curr = _safe_float_prize(raw_curr)
+                # ★ 수정: _first_valid()로 NaN 행 건너뜀 (브릿지 버그 핵심 수정)
+                val_curr = _safe_float_prize(_first_valid(match_df, cfg.get('col_val_curr', '')))
                 
                 curr_req = float(cfg.get('curr_req', 100000.0))
                 calc_rate, tier_achieved, prize = 0, 0, 0
@@ -430,15 +444,15 @@ def calculate_prize_for_code(target_code, prize_config, df_src):
                     "curr_req": curr_req, "next_tier": next_tier, "shortfall": shortfall})
             else:
                 if not prize_details: continue  # 미대상 → 항목 자체 미표시
-                raw_val = match_df[cfg['col_val']].values[0] if cfg.get('col_val') and cfg['col_val'] in df_src.columns else 0
-                val = _safe_float_prize(raw_val)
+                # ★ 수정: _first_valid()로 NaN 행 건너뜀
+                val = _safe_float_prize(_first_valid(match_df, cfg.get('col_val', '')))
                 results.append({"name": cfg['name'], "category": "weekly", "type": "구간",
                     "val": val, "prize": prize, "prize_details": prize_details})
+
         elif cat == 'cumulative':
             if not prize_details: continue  # 미대상 → 항목 자체 미표시
-            col_val = cfg.get('col_val', '')
-            raw_val = match_df[col_val].values[0] if col_val and col_val in match_df.columns else 0
-            val = _safe_float_prize(raw_val)
+            # ★ 수정: _first_valid()로 NaN 행 건너뜀
+            val = _safe_float_prize(_first_valid(match_df, cfg.get('col_val', '')))
             results.append({"name": cfg['name'], "category": "cumulative", "type": "누계",
                 "val": val, "prize": prize, "prize_details": prize_details})
     
