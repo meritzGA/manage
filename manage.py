@@ -595,10 +595,7 @@ def load_file_data(file_bytes, file_name):
 # ★ HTML 테이블 렌더링 함수
 # ==========================================
 def render_html_table(df, col_groups=None, prize_data_map=None):
-    """DataFrame을 틀 고정 + 그룹 헤더 + 정렬 + 반응형 HTML 테이블로 변환
-    ★ colspan 없이 셀 수를 항상 동일하게 유지 → 밀림 방지
-    prize_data_map: {row_idx: (results, total)} — 시상금 데이터
-    """
+    """DataFrame을 틀 고정 + 그룹 헤더 + 정렬 + 반응형 HTML 테이블로 변환"""
     table_id = f"perf_{uuid.uuid4().hex[:8]}"
     num_cols = len(df.columns)
     shortfall_cols = set(c for c in df.columns if '부족금액' in c)
@@ -616,22 +613,13 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
     grp_h = 30
     col_h = 36
     
-    # 각 컬럼 인덱스에 대한 그룹 정보 계산
-    # group_info[i] = (group_name, position) where position: 'first', 'mid', 'last', 'solo' or None
-    # 그룹별 색상 팔레트 (최대 8개, 순환)
     GROUP_COLORS = [
-        '#2B6CB0',  # 블루
-        '#2F855A',  # 그린
-        '#9B2C2C',  # 레드
-        '#6B46C1',  # 퍼플
-        '#B7791F',  # 골드
-        '#2C7A7B',  # 틸
-        '#C05621',  # 오렌지
-        '#702459',  # 핑크
+        '#2B6CB0', '#2F855A', '#9B2C2C', '#6B46C1',
+        '#B7791F', '#2C7A7B', '#C05621', '#702459',
     ]
     
     col_to_group = {}
-    group_color_map = {}  # group_name → color
+    group_color_map = {}
     for gi, grp in enumerate(col_groups):
         color = GROUP_COLORS[gi % len(GROUP_COLORS)]
         group_color_map[grp['name']] = color
@@ -640,14 +628,12 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
     
     columns = list(df.columns)
     
-    # 각 그룹의 가운데 셀 인덱스 계산
-    group_mid = {}  # group_name → column index that shows text
+    group_mid = {}
     for gname in set(col_to_group.values()):
         indices = [i for i, c in enumerate(columns) if col_to_group.get(c) == gname]
         if indices:
             group_mid[gname] = indices[len(indices) // 2]
     
-    # group_info: (group_name, is_first, is_last, is_mid_text)
     group_info = []
     for i, col in enumerate(columns):
         gname = col_to_group.get(col, None)
@@ -662,14 +648,11 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
             group_info.append((gname, is_first, is_last, is_text))
     
     def fc(i):
-        """freeze class"""
         if i >= freeze_count: return ""
         c = "col-freeze"
         if i == freeze_count - 1: c += " col-freeze-last"
         return c
 
-    # ── CSS ──
-    # 모바일 감지 기반 폰트 크기 결정
     mob_font = max(9, base_font - 2)
     
     html = f"""
@@ -687,26 +670,22 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
         border-collapse: separate; border-spacing: 0;
         white-space: nowrap; font-size: {base_font}px;
     }}
-    /* 공통 헤더 */
     .perf-table thead th {{
         background-color: #4e5968; color: #fff; font-weight: 700;
         text-align: center; border: 1px solid #3d4654;
         position: sticky; z-index: 2; white-space: nowrap;
     }}
-    /* 그룹 행 */
     .perf-table .rg th {{ top: 0; height: {grp_h}px; padding: 4px 6px; cursor: default; }}
     .perf-table .rg .ge {{ background: #4e5968; border-bottom-color: #4e5968; }}
     .perf-table .rg .gc {{ border-left: none; border-right: none; }}
     .perf-table .rg .gc-first {{ border-left: 1px solid #3d4654; border-right: none; }}
     .perf-table .rg .gc-last {{ border-left: none; border-right: 1px solid #3d4654; }}
     .perf-table .rg .gc-solo {{ border-left: 1px solid #3d4654; border-right: 1px solid #3d4654; }}
-    /* 모바일용 컬럼 헤더 색상 바 (기본 숨김) */
     .perf-table .rc th .grp-bar {{
         display: none;
         height: 4px; border-radius: 2px;
         margin: 0 auto 3px auto; width: 80%;
     }}
-    /* 컬럼 행 */
     .perf-table .rc th {{
         top: {grp_h if has_groups else 0}px; height: {col_h}px;
         padding: 6px 10px; cursor: pointer; user-select: none;
@@ -714,7 +693,6 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
     .perf-table thead th:hover {{ background-color: #3d4654; }}
     .sa {{ margin-left: 3px; font-size: 10px; opacity: 0.5; }}
     .sa.active {{ opacity: 1; }}
-    /* 본문 */
     .perf-table tbody td {{
         text-align: center; padding: 6px 10px;
         border: 1px solid #e5e8eb; white-space: nowrap;
@@ -727,25 +705,21 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
     thead th.col-freeze {{ z-index: 3; }}
     .col-freeze-last {{ box-shadow: 2px 0 5px rgba(0,0,0,0.08); }}
     
-    /* 📱 태블릿 */
     @media (max-width: 1200px) {{
         .perf-table {{ font-size: {max(10, 13 - num_cols // 3)}px; }}
         .perf-table thead th, .perf-table tbody td {{ padding: 5px 6px; }}
     }}
-    /* 📱 모바일 */
     @media (max-width: 768px) {{
         .perf-table-wrap {{ max-height: 75vh; border-radius: 8px; }}
         .perf-table {{ font-size: {mob_font}px; }}
         .perf-table thead th {{ padding: 4px 5px; }}
         .perf-table tbody td {{ padding: 4px 5px; }}
-        /* 그룹 행 숨김 → 색상 바로 대체 */
         .perf-table .rg {{ display: none; }}
         .perf-table .rc th {{ top: 0 !important; padding: 5px 5px 4px 5px; }}
         .perf-table .rc th .grp-bar {{ display: block; }}
         .sa {{ font-size: 8px; margin-left: 1px; }}
         .col-freeze-last {{ box-shadow: 2px 0 3px rgba(0,0,0,0.12); }}
     }}
-    /* 📱 소형 모바일 */
     @media (max-width: 480px) {{
         .perf-table {{ font-size: {max(8, mob_font - 1)}px; }}
         .perf-table thead th, .perf-table tbody td {{ padding: 3px 3px; }}
@@ -753,9 +727,6 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
         .perf-table .rc th .grp-bar {{ height: 3px; margin-bottom: 2px; }}
     }}
     
-    /* ══════════════════════════════════════
-       데스크톱/모바일 뷰 토글
-       ══════════════════════════════════════ */
     .desktop-view {{ display: block; }}
     .mobile-view {{ display: none; }}
     
@@ -764,9 +735,6 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
         .mobile-view {{ display: block !important; }}
     }}
     
-    /* ══════════════════════════════════════
-       📱 모바일 카드 스타일
-       ══════════════════════════════════════ */
     .mobile-view {{
         padding: 0 4px;
         max-height: 80vh;
@@ -831,7 +799,6 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
     .m-val {{ color: #191f28; font-weight: 600; text-align: right; }}
     .m-row.m-sc .m-val {{ color: rgb(128,0,0); font-weight: 800; }}
     
-    /* 복사 버튼 */
     .m-copy-wrap {{
         padding: 10px 14px 6px; text-align: center;
     }}
@@ -847,7 +814,6 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
         background: linear-gradient(135deg, #22C55E 0%, #16A34A 100%);
         color: #fff;
     }}
-    /* 데스크톱 행 복사 버튼 */
     .d-copy-btn {{
         border: none; border-radius: 6px; padding: 4px 10px;
         background: #FEE500; color: #3C1E1E;
@@ -859,12 +825,10 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
     </style>
     """
 
-    # ── 테이블 시작 ──
     html += '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
     html += '<div class="desktop-view">'
     html += f'<div class="perf-table-wrap" id="wrap_{table_id}"><table class="perf-table" id="{table_id}"><thead>'
     
-    # ── 그룹 행: 항상 N개 <th> (colspan 없음) ──
     if has_groups:
         html += '<tr class="rg">'
         for i, col in enumerate(columns):
@@ -874,19 +838,13 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
                 html += f'<th class="ge {f_cls}" data-col="{i}"></th>'
             else:
                 gc = group_color_map.get(gname, '#364152')
-                # border 클래스 결정
-                if is_first and is_last:
-                    b_cls = "gc-solo"
-                elif is_first:
-                    b_cls = "gc-first"
-                elif is_last:
-                    b_cls = "gc-last"
-                else:
-                    b_cls = "gc"
-                # 가운데 셀에만 텍스트 표시
+                if is_first and is_last: b_cls = "gc-solo"
+                elif is_first: b_cls = "gc-first"
+                elif is_last: b_cls = "gc-last"
+                else: b_cls = "gc"
                 text = gname if is_text else ""
                 html += f'<th class="{b_cls} {f_cls}" style="background:{gc};" data-col="{i}">{text}</th>'
-        html += '<th class="ge" data-col="-1"></th>'  # 복사 열 (빈 그룹)
+        html += '<th class="ge" data-col="-1"></th>'
         html += '</tr>'
     html += '<tr class="rc">'
     for i, col in enumerate(columns):
@@ -901,7 +859,6 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
     html += '<th data-col="-1" style="min-width:50px; cursor:default;">복사</th>'
     html += '</tr></thead><tbody>'
 
-    # ── 본문 ──
     for row_idx, (_, row) in enumerate(df.iterrows()):
         html += '<tr>'
         for i, col in enumerate(columns):
@@ -916,15 +873,13 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
         html += '</td>'
         html += '</tr>'
     html += '</tbody></table></div>'
-    # ── END desktop table ──
-    html += '</div>'  # close .desktop-view
+    html += '</div>'
     
     # ══════════════════════════════════════════
-    # 📋 각 행별 클립보드 텍스트 생성 (데스크톱/모바일 공용)
+    # 📋 각 행별 클립보드 텍스트 생성
     # ══════════════════════════════════════════
     columns = list(df.columns)
     
-    # 이름 열 찾기
     name_col = None
     name_keywords = ['설계사명', '성명', '이름', '팀장명']
     for c in columns:
@@ -932,8 +887,6 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
             name_col = c
             break
     
-    # 식별 열 vs 데이터 열 분류
-    # 카톡 이름줄: 지사명 + 설계사명 딱 2개만
     clip_name_keywords = ['지사', '설계사명', '성명', '이름', '팀장명']
     goal_keywords = ['다음목표', '부족금액']
     
@@ -949,13 +902,11 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
         else:
             data_cols.append(c)
     
-    # 그룹별 열 매핑
     col_to_grp = {}
     for grp in col_groups:
         for c in grp['cols']:
             col_to_grp[c] = grp['name']
     
-    # 기준일 / 인사말
     data_date = ''
     clip_footer = ''
     try:
@@ -968,7 +919,6 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
     
     clip_texts = []
     for row_idx, (_, row) in enumerate(df.iterrows()):
-        # 인적사항 조합: 대리점명 + 이름 + "팀장님"
         name_parts = []
         for c in clip_name_cols:
             v = str(row[c]) if not pd.isna(row[c]) else ''
@@ -988,7 +938,6 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
         
         current_group = None
         for c in data_cols:
-            # 코드 열은 카톡 복사에서 제외
             if '코드' in c or '번호' in c:
                 continue
             val = str(row[c]) if not pd.isna(row[c]) else ''
@@ -1004,10 +953,8 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
                 lines.append(f"━━ {grp} ━━")
                 current_group = grp
             elif grp is None and not is_goal and current_group is not None:
-                # 일반 데이터 열이 그룹 밖으로 나가면 구분선
                 lines.append("")
                 current_group = None
-            # is_goal이면 이전 그룹 유지 (구분선 삽입 안 함)
             
             if '부족금액' in c:
                 lines.append(f"🔴 {c}: {val}")
@@ -1016,21 +963,18 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
             else:
                 lines.append(f"  {c}: {val}")
         
-        # 시상금 정보 추가
         if prize_data_map and row_idx in prize_data_map:
             p_results, p_total = prize_data_map[row_idx]
             prize_text = format_prize_clip_text(p_results, p_total)
             if prize_text:
                 lines.append(prize_text)
         
-        # 인사말 추가
         if clip_footer:
             lines.append("")
             lines.append(clip_footer)
         
         clip_texts.append('\n'.join(lines))
     
-    # JS 안전하게 전달 — HTML-safe base64 인코딩
     import base64 as _b64
     clip_json_bytes = json.dumps(clip_texts, ensure_ascii=False).encode('utf-8')
     clip_b64 = _b64.b64encode(clip_json_bytes).decode('ascii')
@@ -1096,7 +1040,6 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
     html += '<div class="mobile-view">'
     
     for row_idx, (_, row) in enumerate(df.iterrows()):
-        # 인적사항 조합
         name_parts_card = []
         for c in clip_name_cols:
             v = str(row[c]) if not pd.isna(row[c]) else ''
@@ -1104,13 +1047,11 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
                 name_parts_card.append(v.strip())
         person_card = ' '.join(name_parts_card) if name_parts_card else ''
         
-        # 이름만 추출 (카드 헤더 굵은 글씨용)
         name_val = str(row.get(name_col, '')) if name_col else (person_card or '')
         num_val = str(row.get('순번', row_idx + 1)) if '순번' in columns else str(row_idx + 1)
         
         html += f'<div class="m-card">'
         
-        # 카드 헤더: 이름 + 요약 배지
         summary_items = []
         for c in data_cols:
             if '부족금액' in c:
@@ -1123,7 +1064,6 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
                     summary_items.append(f'<span class="m-goal">{v}</span>')
         summary = ' '.join(summary_items)
         
-        # 시상금 배지 추가
         if prize_data_map and row_idx in prize_data_map:
             _, p_total = prize_data_map[row_idx]
             if p_total > 0:
@@ -1137,16 +1077,13 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
             html += f'<span class="m-summary">{summary}</span>'
         html += '<span class="m-chevron">&#9660;</span></div>'
         
-        # 카드 본문
         html += '<div class="m-card-body">'
         
-        # 📋 복사 버튼 + 💰 시상금 조회 버튼
         html += f'<div class="m-copy-wrap"><button class="m-copy-btn" onclick="copyClip({row_idx}, this, event)">📋 카톡 보내기</button>'
         if prize_data_map and row_idx in prize_data_map:
             html += f'<button class="m-copy-btn" onclick="showPrize({row_idx}, event)" style="background:#fff3e0;color:#d9232e;border:1px solid #ffd4a8;margin-top:4px;">💰 시상금 상세 조회</button>'
         html += '</div>'
         
-        # 인적사항 (이름 외 추가 정보)
         for c in clip_name_cols:
             if c == name_col:
                 continue
@@ -1154,7 +1091,6 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
             if val.strip() and val != '0':
                 html += f'<div class="m-row"><span class="m-label">{c}</span><span class="m-val">{val}</span></div>'
         
-        # 실적 데이터
         current_group = None
         for c in data_cols:
             val = str(row[c]) if not pd.isna(row[c]) else ''
@@ -1174,16 +1110,15 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
             extra_cls = ' m-sc' if c in shortfall_cols else ''
             html += f'<div class="m-row{extra_cls}"><span class="m-label">{c}</span><span class="m-val">{val}</span></div>'
         
-        # 시상금 섹션
         if prize_data_map and row_idx in prize_data_map:
             p_results, p_total = prize_data_map[row_idx]
             html += build_prize_card_html(p_results, p_total)
         
-        html += '</div></div>'  # m-card-body, m-card
+        html += '</div></div>'
     
-    html += '</div>'  # mobile-view
+    html += '</div>'
     
-    # ── 복사 팝업 오버레이 (iframe 내부) ──
+    # ── 복사 팝업 오버레이 ──
     html += """
     <div id="clip-overlay" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0;
         background:rgba(0,0,0,0.5); z-index:99999; justify-content:center; align-items:center; padding:20px;"
@@ -1215,7 +1150,6 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
     </div>
     """
 
-    # ── JavaScript ──
     html += f"""
     <script>
     var FC_DESKTOP = {freeze_count};
@@ -1229,8 +1163,6 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
         evt.stopPropagation();
         var text = clipData[idx];
         if (!text) return;
-        
-        // 📱 모바일: 네이티브 공유 (카톡 직접 선택 가능)
         if (isMobile() && navigator.share) {{
             navigator.share({{ text: text }}).then(function() {{
                 showCopied(btn);
@@ -1239,12 +1171,9 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
             }});
             return;
         }}
-        
-        // 🖥️ PC: 동일 클릭 이벤트 내에서 즉시 복사 시도
         fallbackCopy(text, btn);
     }}
     function fallbackCopy(text, btn) {{
-        // 방법 1: 임시 textarea + execCommand (user gesture 내)
         var ta = document.createElement('textarea');
         ta.value = text;
         ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
@@ -1255,13 +1184,10 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
         var ok = false;
         try {{ ok = document.execCommand('copy'); }} catch(e) {{}}
         document.body.removeChild(ta);
-        
         if (ok) {{
             showCopied(btn);
             return;
         }}
-        
-        // 방법 2: Clipboard API
         if (navigator.clipboard && navigator.clipboard.writeText) {{
             navigator.clipboard.writeText(text).then(function() {{
                 showCopied(btn);
@@ -1270,8 +1196,6 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
             }});
             return;
         }}
-        
-        // 방법 3: 오버레이 (수동 복사)
         showOverlay(text);
     }}
     function showOverlay(text) {{
@@ -1284,8 +1208,6 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
     function doCopyOverlay() {{
         var ta = document.getElementById('clip-ta');
         var text = ta.value;
-        
-        // 임시 textarea로 복사 (오버레이 textarea 대신 새로 만들어서)
         var tmp = document.createElement('textarea');
         tmp.value = text;
         tmp.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
@@ -1296,15 +1218,12 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
         var ok = false;
         try {{ ok = document.execCommand('copy'); }} catch(e) {{}}
         document.body.removeChild(tmp);
-        
         if (!ok) {{
-            // 원래 textarea로도 시도
             ta.readOnly = false;
             ta.focus(); ta.select(); ta.setSelectionRange(0, 999999);
             try {{ ok = document.execCommand('copy'); }} catch(e2) {{}}
             ta.readOnly = true;
         }}
-        
         var btn = document.getElementById('clip-copy-btn');
         btn.textContent = ok ? '✅ 복사 완료!' : '⚠️ 텍스트를 직접 선택 후 Ctrl+C';
         btn.style.background = ok ? '#22C55E' : '#f59e0b'; btn.style.color = '#fff';
@@ -1315,7 +1234,6 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
                 btn.style.background = '#FEE500'; btn.style.color = '#3C1E1E';
             }}, 1200);
         }} else {{
-            // 실패 시 textarea를 편집 가능하게 열어두고 선택 상태 유지
             ta.readOnly = false;
             ta.focus(); ta.select(); ta.setSelectionRange(0, 999999);
         }}
@@ -1336,7 +1254,6 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
     
     function applyFreeze() {{
         var t = document.getElementById("{table_id}");
-        // 모바일에서는 고정 열 최대 2개로 제한
         FC = isMobile() ? Math.min(FC_DESKTOP, 2) : FC_DESKTOP;
         if (!t || FC === 0) return;
         var fr = t.querySelector("tbody tr");
@@ -1350,7 +1267,6 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
                 c.style.position = "sticky";
                 c.style.zIndex = c.tagName === "TH" ? "3" : "1";
             }} else if (!isNaN(idx) && idx >= FC) {{
-                // 모바일에서 초과 고정 열 해제
                 c.style.position = "static";
                 c.style.boxShadow = "none";
             }}
@@ -1386,7 +1302,6 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
             return asc ? aT.localeCompare(bT,'ko') : bT.localeCompare(aT,'ko');
         }});
         rows.forEach(function(r) {{ tb.appendChild(r); }});
-        // 순번 재배정
         var allRows = tb.querySelectorAll("tr");
         allRows.forEach(function(r, idx) {{ if (r.cells[0]) r.cells[0].textContent = idx + 1; }});
         t.querySelectorAll("thead th").forEach(function(h) {{
@@ -1407,7 +1322,6 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
 st.sidebar.title("메뉴")
 menu = st.sidebar.radio("이동할 화면을 선택하세요", ["매니저 화면 (로그인)", "관리자 화면 (설정)"])
 
-# 백업/초기화는 관리자 로그인 후에만 표시
 if st.session_state.get('admin_authenticated', False) and menu == "관리자 화면 (설정)":
     st.sidebar.divider()
     with st.sidebar.expander("💾 설정 백업 / 복원"):
@@ -1484,7 +1398,6 @@ if menu == "관리자 화면 (설정)":
             cols1 = df1.columns.tolist()
             cols2 = df2.columns.tolist()
             
-            # 이전에 저장된 merge key가 있으면 자동 선택
             prev_key1 = st.session_state.get('merge_key1_col', '')
             prev_key2 = st.session_state.get('merge_key2_col', '')
             idx1 = cols1.index(prev_key1) if prev_key1 in cols1 else 0
@@ -1498,7 +1411,6 @@ if menu == "관리자 화면 (설정)":
                 submit_merge = st.form_submit_button("🔄 데이터 병합 및 교체 (설정 유지)")
                 if submit_merge:
                     with st.spinner("데이터를 병합하고 저장 중입니다..."):
-                        # ✅ 파일 생성일자 추출 (최신 날짜 저장)
                         file_dates = []
                         for f_obj in [file1, file2]:
                             if f_obj.name.endswith('.xlsx'):
@@ -1519,7 +1431,6 @@ if menu == "관리자 화면 (설정)":
                         df2['merge_key2'] = df2[key2].apply(clean_key)
                         df_merged = pd.merge(df1, df2, left_on='merge_key1', right_on='merge_key2', how='outer', suffixes=('_파일1', '_파일2'))
                         
-                        # ✅ suffix로 분리된 동일 열을 자동 통합 (coalesce)
                         cols_1 = [c for c in df_merged.columns if c.endswith('_파일1')]
                         for c1 in cols_1:
                             base = c1.replace('_파일1', '')
@@ -1528,18 +1439,14 @@ if menu == "관리자 화면 (설정)":
                                 df_merged[base] = df_merged[c1].combine_first(df_merged[c2])
                                 df_merged.drop(columns=[c1, c2], inplace=True)
                         
-                        # ✅ 두 파일의 merge key를 통합한 검색용 키 생성
                         df_merged['_unified_search_key'] = df_merged['merge_key1'].combine_first(df_merged['merge_key2'])
                         
-                        # merge key 선택값 저장 (다음 업로드 시 자동 선택)
                         st.session_state['merge_key1_col'] = key1
                         st.session_state['merge_key2_col'] = key2
                         st.session_state['df_merged'] = df_merged
                         
-                        # ✅ 기존 설정 검증 - 사라진 열이 있는 항목만 제거, 나머지 유지
                         new_cols = [c for c in df_merged.columns if c not in ['merge_key1', 'merge_key2']]
                         
-                        # manager_col / manager_name_col 검증
                         if st.session_state['manager_col'] not in new_cols:
                             st.session_state['manager_col'] = ""
                         if st.session_state.get('manager_col2', '') and st.session_state['manager_col2'] not in new_cols:
@@ -1547,7 +1454,6 @@ if menu == "관리자 화면 (설정)":
                         if st.session_state['manager_name_col'] not in new_cols:
                             st.session_state['manager_name_col'] = ""
                         
-                        # admin_cols 검증 - 열이 살아있는 항목만 유지, fallback도 검증
                         valid_admin_cols = []
                         for item in st.session_state['admin_cols']:
                             if item['col'] in new_cols:
@@ -1556,7 +1462,6 @@ if menu == "관리자 화면 (설정)":
                                 valid_admin_cols.append(item)
                         st.session_state['admin_cols'] = valid_admin_cols
                         
-                        # admin_goals 검증 (list 형태)
                         goals = st.session_state.get('admin_goals', [])
                         if isinstance(goals, dict):
                             goals = [{"target_col": k, "ref_col": "", "tiers": v} for k, v in goals.items()]
@@ -1568,7 +1473,6 @@ if menu == "관리자 화면 (설정)":
                                 valid_goals.append(goal)
                         st.session_state['admin_goals'] = valid_goals
                         
-                        # admin_categories 검증 - 모든 조건 열이 존재하는 것만 유지
                         valid_cats = []
                         for cat in st.session_state['admin_categories']:
                             cond_list = cat.get('conditions', [])
@@ -1576,11 +1480,8 @@ if menu == "관리자 화면 (설정)":
                                 valid_cats.append(cat)
                         st.session_state['admin_categories'] = valid_cats
                         
-                        # col_groups는 display name 기반이므로 유효한 항목만 보정
-                        # (section 7에서 col_order 재계산 시 자동 정리됨)
-                        
-                        save_data()    # DataFrame 저장 (무거움 — 여기서만 호출)
-                        save_config()  # 설정 저장 (가벼움)
+                        save_data()
+                        save_config()
                         st.success(f"✅ 데이터 교체 완료! 총 {len(df_merged)}행 | 기존 설정이 유지되었습니다.")
                         st.rerun()
         except Exception as e:
@@ -1588,7 +1489,6 @@ if menu == "관리자 화면 (설정)":
 
     st.divider()
     
-    # ✅ 설정 검증 경고 표시 (열이 사라진 경우)
     if has_data():
         warnings = []
         if not st.session_state['manager_col']:
@@ -1600,7 +1500,6 @@ if menu == "관리자 화면 (설정)":
         df = st.session_state['df_merged']
         available_columns = [c for c in df.columns if c not in ['merge_key1', 'merge_key2', '_unified_search_key']]
         
-        # ========================================
         st.header("2. 📅 기준일 및 카톡 복사 문구 설정")
         with st.form("date_footer_form"):
             current_date = st.session_state.get('data_date', '')
@@ -1616,7 +1515,6 @@ if menu == "관리자 화면 (설정)":
                 save_data_and_config()
                 st.rerun()
         
-        # ========================================
         st.header("3. 매니저 로그인 및 이름 표시 열 설정")
         st.caption("두 파일의 매니저 코드 열 이름이 다른 경우, 보조 열을 추가 선택하면 양쪽 모두 검색됩니다.")
         col_m1, col_m2 = st.columns(2)
@@ -1644,7 +1542,6 @@ if menu == "관리자 화면 (설정)":
 
         st.divider()
 
-        # ========================================
         st.header("4. 표시할 데이터 항목 및 필터 추가")
         c1, c2, c3 = st.columns([3, 3, 3])
         with c1: sel_col = st.selectbox("항목 선택 (주 열)", available_columns, key="sec3_col")
@@ -1682,7 +1579,6 @@ if menu == "관리자 화면 (설정)":
 
         st.divider()
 
-        # ========================================
         st.header("5. 목표 구간 설정 (기준열 연동 가능)")
         st.caption("기준 열(A)을 설정하면, A값이 B 목표의 상한선이 됩니다. (예: A=40만이면 B의 최대 목표도 40만)")
         c1, c2 = st.columns(2)
@@ -1700,7 +1596,6 @@ if menu == "관리자 화면 (설정)":
                     tiers_list = [float(x.strip()) for x in goal_tiers.split(",") if x.strip().replace('.','',1).isdigit()]
                     if tiers_list:
                         ref = goal_ref if goal_ref != "(없음 - 고정 구간)" else ""
-                        # admin_goals를 list 형태로 관리
                         goals = st.session_state.get('admin_goals', [])
                         if isinstance(goals, dict):
                             goals = [{"target_col": k, "ref_col": "", "tiers": v} for k, v in goals.items()]
@@ -1709,7 +1604,6 @@ if menu == "관리자 화면 (설정)":
                         save_data_and_config()
                         st.rerun()
                 
-        # 기존 dict 형태 → list 형태 자동 변환
         goals = st.session_state.get('admin_goals', [])
         if isinstance(goals, dict):
             goals = [{"target_col": k, "ref_col": "", "tiers": v} for k, v in goals.items()]
@@ -1732,7 +1626,6 @@ if menu == "관리자 화면 (설정)":
 
         st.divider()
 
-        # ========================================
         st.header("6. 맞춤형 분류(태그) 설정 (3개 조건 조합)")
         with st.form("add_cat_form"):
             col1, col2 = st.columns(2)
@@ -1771,7 +1664,6 @@ if menu == "관리자 화면 (설정)":
 
         st.divider()
 
-        # ========================================
         st.header("7. 📋 화면 표시 순서 커스텀 설정")
         expected_cols = []
         if st.session_state['admin_categories']: expected_cols.append("맞춤분류")
@@ -1787,7 +1679,6 @@ if menu == "관리자 화면 (설정)":
                 
         if st.session_state.get('col_order', []) != valid_order:
             st.session_state['col_order'] = valid_order
-            # 자동 저장하지 않음 — 다른 설정 변경 시 함께 저장됨
 
         if st.session_state['col_order']:
             st.write("---")
@@ -1808,11 +1699,9 @@ if menu == "관리자 화면 (설정)":
 
         st.divider()
 
-        # ========================================
         st.header("8. 📊 항목 그룹 헤더 설정")
         st.caption("여러 항목을 묶어서 상단에 그룹명을 표시합니다. (예: A, B, C 항목을 '2~3월 시책 현황')")
         
-        # 표시 순서에 등록된 항목 목록을 선택지로 사용
         col_order = st.session_state.get('col_order', [])
         if col_order:
             with st.form("add_group_form"):
@@ -1839,14 +1728,12 @@ if menu == "관리자 화면 (설정)":
         else:
             st.info("먼저 7번에서 표시 순서를 설정해주세요.")
         
-        # ========================================
         st.divider()
         st.header("9. 💰 시상금 설정")
         st.caption("시상금 시책을 설정합니다. 실적과 시상금을 파일에서 직접 읽어옵니다. 매니저 화면의 📋 카톡에 시상금이 포함되고 💰 버튼이 표시됩니다.")
         
         prize_cfgs = st.session_state.get('prize_config', [])
         
-        # ── 주차/브릿지 시상 추가 ──
         st.markdown("**📌 주차/브릿지 시상**")
         if st.button("➕ 주차/브릿지 시상 추가", key="add_prize_weekly"):
             prize_cfgs.append({
@@ -1896,7 +1783,6 @@ if menu == "관리자 화면 (설정)":
                     cfg['col_val'] = st.selectbox("실적 수치 열", cols, index=_gi(cfg.get('col_val',''), cols), key=f"pval_{idx}")
                 
                 if "2기간" in cfg['type']:
-                    # 🌟 브릿지2: 구간/지급률 계산
                     cfg['curr_req'] = st.number_input("당월 필수 달성 금액 (합산용)", value=float(cfg.get('curr_req', 100000.0)), step=10000.0, key=f"creq2_{idx}")
                     st.write("📈 구간 설정 (달성금액, 지급률%)")
                     tier_str = "\n".join([f"{int(t[0])},{int(t[1])}" for t in cfg.get('tiers', [])])
@@ -1912,7 +1798,6 @@ if menu == "관리자 화면 (설정)":
                         st.error("형식이 올바르지 않습니다.")
                     st.caption("💡 브릿지 2기간: (확보구간 + 당월가동금액) × 지급률")
                 else:
-                    # 🌟 구간/브릿지1: 시상금 다중 항목 직접 읽기
                     st.markdown("**💰 시상금 항목 (여러 개 가능)**")
                     st.caption("지급률 컬럼: 0이면 미대상(미표시). 공란이면 무조건 대상 처리.")
                     if 'prize_items' not in cfg:
@@ -1961,7 +1846,6 @@ if menu == "관리자 화면 (설정)":
         
         st.markdown("---")
         
-        # ── 누계 시상 추가 ──
         st.markdown("**📈 월간 누계 시상**")
         if st.button("➕ 누계 시상 추가", key="add_prize_cumul"):
             prize_cfgs.append({
@@ -1991,7 +1875,6 @@ if menu == "관리자 화면 (설정)":
                 cfg['col_code'] = st.selectbox("설계사코드(사번) 열", cols, index=_gi(cfg.get('col_code',''), cols), key=f"pccode_{idx}")
                 cfg['col_val'] = st.selectbox("누계 실적 열", cols, index=_gi(cfg.get('col_val',''), cols), key=f"pval_{idx}")
                 
-                # 🌟 시상금 다중 항목 설정
                 st.markdown("**💰 시상금 항목 (여러 개 가능)**")
                 st.caption("지급률 컬럼: 0이면 미대상(미표시). 공란이면 무조건 대상 처리.")
                 if 'prize_items' not in cfg:
@@ -2051,10 +1934,8 @@ if menu == "관리자 화면 (설정)":
                 if not isinstance(imported, list):
                     st.error("올바른 config.json 형식이 아닙니다.")
                 else:
-                    # 호환성 처리
                     for c in imported:
                         if 'category' not in c: c['category'] = 'weekly'
-                        # file 키 제거 (우리 앱은 df_merged 사용)
                         c.pop('file', None)
                         c.pop('col_name', None)
                         c.pop('col_branch', None)
@@ -2112,11 +1993,9 @@ elif menu == "매니저 화면 (로그인)":
     if submit_login and manager_code:
         manager_code_clean = clean_key(manager_code)
         
-        # ✅ 주 매니저 코드 열 검색
         df['search_key'] = df[manager_col].apply(clean_key)
         mask = df['search_key'] == manager_code_clean
         
-        # ✅ 보조 매니저 코드 열 검색 (두 파일의 열 이름이 다를 때)
         manager_col2 = st.session_state.get('manager_col2', '')
         if manager_col2 and manager_col2 in df.columns:
             df['search_key2'] = df[manager_col2].apply(clean_key)
@@ -2125,7 +2004,6 @@ elif menu == "매니저 화면 (로그인)":
         my_df = df[mask].copy()
         
         if my_df.empty:
-            # 부분 일치 검색 (fallback)
             partial_mask = df['search_key'].str.contains(manager_code_clean, na=False)
             if manager_col2 and 'search_key2' in df.columns:
                 partial_mask = partial_mask | df['search_key2'].str.contains(manager_code_clean, na=False)
@@ -2154,9 +2032,6 @@ elif menu == "매니저 화면 (로그인)":
             
             display_cols = []
             
-            # -------------------------------------------------------------------
-            # ⭐ (1) 가장 먼저 "맞춤분류(태그)" 평가 실행 (원본 데이터 손실 전)
-            # -------------------------------------------------------------------
             if st.session_state['admin_categories']:
                 if '맞춤분류' not in my_df.columns:
                     my_df['맞춤분류'] = ""
@@ -2173,9 +2048,6 @@ elif menu == "매니저 화면 (로그인)":
                     my_df.loc[final_mask, '맞춤분류'] += f"[{c_name}] "
                 display_cols.append('맞춤분류')
             
-            # -------------------------------------------------------------------
-            # (2) 일반 항목 필터 및 데이터 삭제 실행
-            # -------------------------------------------------------------------
             for item in st.session_state['admin_cols']:
                 orig_col = item['col']
                 fallback_col = item.get('fallback_col', '')
@@ -2185,7 +2057,6 @@ elif menu == "매니저 화면 (로그인)":
                     mask = evaluate_condition(my_df, orig_col, item['condition'])
                     my_df = my_df[mask]
                 
-                # ✅ 주 열 값이 없으면 대체 열에서 가져오기
                 if fallback_col and fallback_col in my_df.columns and orig_col in my_df.columns:
                     my_df[disp_col] = my_df[orig_col].combine_first(my_df[fallback_col])
                 elif orig_col in my_df.columns:
@@ -2194,11 +2065,7 @@ elif menu == "매니저 화면 (로그인)":
                     my_df[disp_col] = ""
                 display_cols.append(disp_col)
             
-            # -------------------------------------------------------------------
-            # (3) 목표 구간 처리 (기준열 연동 지원)
-            # -------------------------------------------------------------------
             goals = st.session_state.get('admin_goals', [])
-            # 기존 dict 형태 호환
             if isinstance(goals, dict):
                 goals = [{"target_col": k, "ref_col": "", "tiers": v} for k, v in goals.items()]
             
@@ -2210,29 +2077,23 @@ elif menu == "매니저 화면 (로그인)":
                 if g_col not in my_df.columns:
                     continue
                 
-                # B열(target) 숫자 변환
                 cleaned_str = my_df[g_col].astype(str).str.replace(',', '', regex=False)
                 my_df[g_col] = pd.to_numeric(cleaned_str, errors='coerce').fillna(0)
                 
-                # A열(ref) 숫자 변환 (있는 경우)
                 if ref_col and ref_col in my_df.columns:
                     ref_cleaned = my_df[ref_col].astype(str).str.replace(',', '', regex=False)
                     my_df[ref_col] = pd.to_numeric(ref_cleaned, errors='coerce').fillna(0)
                 
                 def calc_shortfall(row):
                     val = row[g_col]
-                    
-                    # 기준열(A)이 있으면, A값이 B 목표의 상한선
                     if ref_col and ref_col in row.index:
                         ref_val = row[ref_col]
                         applicable_tiers = [t for t in tiers if t <= ref_val]
                         if not applicable_tiers:
-                            # A값이 최소 구간보다 작으면 목표 없음
                             return pd.Series(["목표 없음", 0])
                     else:
                         applicable_tiers = tiers
                     
-                    # 적용 가능한 구간 중 다음 목표 찾기
                     for t in applicable_tiers:
                         if val < t:
                             if t % 10000 == 0: tier_str = f"{int(t)//10000}만"
@@ -2247,7 +2108,6 @@ elif menu == "매니저 화면 (로그인)":
                 if next_target_col not in display_cols:
                     display_cols.extend([next_target_col, shortfall_col])
 
-            # 3. 데이터 정렬
             sort_keys = []
             if '맞춤분류' in my_df.columns: sort_keys.append('맞춤분류')
             ji_cols = [c for c in display_cols if '지사명' in c]
@@ -2259,7 +2119,6 @@ elif menu == "매니저 화면 (로그인)":
             if sort_keys:
                 my_df = my_df.sort_values(by=sort_keys, ascending=[True] * len(sort_keys))
             
-            # 4. 사용자 지정 순서 정렬
             final_cols = list(dict.fromkeys(display_cols))
             ordered_final_cols = []
             for c in st.session_state.get('col_order', []):
@@ -2272,10 +2131,8 @@ elif menu == "매니저 화면 (로그인)":
             else:
                 final_df = my_df[ordered_final_cols].copy()
                 
-                # 순번 열 추가 (맨 앞)
                 final_df.insert(0, '순번', range(1, len(final_df) + 1))
                 
-                # 5. 세 자리 콤마(,) 포맷팅 및 [0값 빈칸 숨김 처리]
                 for c in final_df.columns:
                     if c != '순번' and '코드' not in c and '연도' not in c:
                         def format_with_comma_and_hide_zero(val):
@@ -2292,47 +2149,49 @@ elif menu == "매니저 화면 (로그인)":
                         
                         final_df[c] = final_df[c].apply(format_with_comma_and_hide_zero)
                 
-                # 6. ★ HTML 테이블로 렌더링 (틀 고정 + 그룹 헤더 + 정렬 + 반응형)
                 col_groups = st.session_state.get('col_groups', [])
                 
-                # 💰 시상금 계산 (자체 통합 — prize_config + df_merged)
+                # ★★★ 수정된 시상금 계산: 각 행의 에이전트 고유 코드 사용 ★★★
                 prize_data_map = {}
                 try:
                     prize_config = st.session_state.get('prize_config', [])
                     if prize_config:
                         df_full = st.session_state.get('df_merged', pd.DataFrame())
                         if not df_full.empty:
-                            # 사번 열 찾기
-                            code_col = None
-                            if '_unified_search_key' in my_df.columns:
-                                code_col = '_unified_search_key'
-                            else:
-                                for c in my_df.columns:
-                                    if '설계사코드' in c or '사번' in c:
-                                        code_col = c; break
-                                if not code_col:
-                                    mk1 = st.session_state.get('merge_key1_col', '')
-                                    if mk1 and mk1 in my_df.columns:
-                                        code_col = mk1
+                            # prize_config에서 사용하는 코드 열(col_code) 수집
+                            prize_code_cols = list(dict.fromkeys(
+                                c.get('col_code', '') for c in prize_config if c.get('col_code')
+                            ))
                             
-                            if code_col:
-                                for row_idx, (_, row) in enumerate(final_df.iterrows()):
-                                    orig_idx = row.name
-                                    if orig_idx in my_df.index:
-                                        raw_code = my_df.loc[orig_idx, code_col] if code_col in my_df.columns else ''
-                                        agent_code = clean_key(str(raw_code)) if not pd.isna(raw_code) else ''
-                                        if agent_code:
-                                            results, total = calculate_prize_for_code(agent_code, prize_config, df_full)
-                                            if results:
-                                                prize_data_map[row_idx] = (results, total)
+                            for row_idx, (_, row) in enumerate(final_df.iterrows()):
+                                orig_idx = row.name
+                                if orig_idx in my_df.index:
+                                    # 각 prize config의 col_code에서 해당 행의 에이전트 코드 읽기
+                                    agent_code = ''
+                                    for pc_col in prize_code_cols:
+                                        if pc_col in my_df.columns:
+                                            raw_code = my_df.loc[orig_idx, pc_col]
+                                            if not pd.isna(raw_code) and clean_key(str(raw_code)):
+                                                agent_code = clean_key(str(raw_code))
+                                                break
+                                    # fallback: 설계사코드/사번 열 검색
+                                    if not agent_code:
+                                        for c in my_df.columns:
+                                            if '설계사코드' in c or '사번' in c or '설계사조직코드' in c:
+                                                raw_code = my_df.loc[orig_idx, c]
+                                                if not pd.isna(raw_code) and clean_key(str(raw_code)):
+                                                    agent_code = clean_key(str(raw_code))
+                                                    break
+                                    if agent_code:
+                                        results, total = calculate_prize_for_code(agent_code, prize_config, df_full)
+                                        if results:
+                                            prize_data_map[row_idx] = (results, total)
                 except Exception:
                     pass
                 
                 table_html = render_html_table(final_df, col_groups=col_groups, prize_data_map=prize_data_map)
                 
-                # 테이블 내부 스크롤 사용 — iframe 높이는 뷰포트 85%로 제한
                 components.html(table_html, height=800, scrolling=False)
           except Exception as e:
             st.error(f"데이터 처리 중 오류가 발생했습니다: {e}")
             st.info("관리자 화면에서 설정을 확인해주세요.")
-
