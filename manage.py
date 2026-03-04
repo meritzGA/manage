@@ -470,7 +470,7 @@ def format_prize_clip_text(results, total):
     for r in bridge_res:
         if r['prize'] > 0:
             if r['type'] == '브릿지2':
-                lines.append(f"  {r['name']}: {r['prize']:,.0f}원 (차월 {int(r.get('curr_req',100000)//10000)}만 가동 시)")
+                lines.append(f"  {r['name']}: {r['prize']:,.0f}원 (당월 {int(r.get('curr_req',100000)//10000)}만 가동 시)")
                 if r.get('shortfall', 0) > 0:
                     lines.append(f"    🚀 다음 구간까지 {r['shortfall']:,.0f}원")
             else:
@@ -518,7 +518,7 @@ def build_prize_card_html(results, total):
         for r in bridge_res:
             pz = f"{r['prize']:,.0f}원" if r['prize'] > 0 else "0원"
             if r['type'] == '브릿지2':
-                label = f"{r['name']}<br><span style='font-size:10px;color:#888;'>(차월 {int(r.get('curr_req',100000)//10000)}만 가동 시)</span>"
+                label = f"{r['name']}<br><span style='font-size:10px;color:#888;'>(당월 {int(r.get('curr_req',100000)//10000)}만 가동 시)</span>"
                 h += f'<div class="m-row"><span class="m-label">{label}</span><span class="m-val" style="color:#d9232e;font-weight:700;">{pz}</span></div>'
                 if r.get('shortfall', 0) > 0:
                     h += f'<div class="m-row"><span class="m-label" style="padding-left:10px;font-size:10px;color:#888;">🚀 다음 구간까지 {r["shortfall"]:,.0f}원</span><span class="m-val"></span></div>'
@@ -1066,7 +1066,7 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
                 for r in p_bridge:
                     pz = f"{r['prize']:,.0f}원" if r['prize'] > 0 else "0원"
                     if r['type'] == '브릿지2':
-                        ph += f'<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0;"><span style="color:#555;">{r["name"]}<br><span style="font-size:10px;color:#888;">(차월 {int(r.get("curr_req",100000)//10000)}만 가동 시)</span></span><span style="color:#d9232e;font-weight:700;">{pz}</span></div>'
+                        ph += f'<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0;"><span style="color:#555;">{r["name"]}<br><span style="font-size:10px;color:#888;">(당월 {int(r.get("curr_req",100000)//10000)}만 가동 시)</span></span><span style="color:#d9232e;font-weight:700;">{pz}</span></div>'
                         if r.get('shortfall', 0) > 0:
                             ph += f'<div style="padding:2px 0 2px 8px;font-size:10px;color:#888;">🚀 다음 구간까지 {r["shortfall"]:,.0f}원</div>'
                     else:
@@ -1878,7 +1878,7 @@ if menu == "관리자 화면 (설정)":
                 if "1기간" in cfg.get('type', ''): type_idx = 1
                 elif "2기간" in cfg.get('type', ''): type_idx = 2
                 cfg['type'] = st.radio("시책 종류", 
-                    ["구간 시책", "브릿지 시책 (1기간: 시상 확정)", "브릿지 시책 (2기간: 차월 달성 조건)"],
+                    ["구간 시책", "브릿지 시책 (1기간: 시상 확정)", "브릿지 시책 (2기간: 당월 달성 조건)"],
                     index=type_idx, horizontal=True, key=f"ptype_{idx}")
                 
                 cols = available_columns
@@ -1897,7 +1897,7 @@ if menu == "관리자 화면 (설정)":
                 
                 if "2기간" in cfg['type']:
                     # 🌟 브릿지2: 구간/지급률 계산
-                    cfg['curr_req'] = st.number_input("차월 필수 달성 금액 (합산용)", value=float(cfg.get('curr_req', 100000.0)), step=10000.0, key=f"creq2_{idx}")
+                    cfg['curr_req'] = st.number_input("당월 필수 달성 금액 (합산용)", value=float(cfg.get('curr_req', 100000.0)), step=10000.0, key=f"creq2_{idx}")
                     st.write("📈 구간 설정 (달성금액, 지급률%)")
                     tier_str = "\n".join([f"{int(t[0])},{int(t[1])}" for t in cfg.get('tiers', [])])
                     tier_input = st.text_area("엔터로 줄바꿈", value=tier_str, height=120, key=f"tier_{idx}")
@@ -1910,7 +1910,7 @@ if menu == "관리자 화면 (설정)":
                         cfg['tiers'] = sorted(new_tiers, key=lambda x: x[0], reverse=True)
                     except:
                         st.error("형식이 올바르지 않습니다.")
-                    st.caption("💡 브릿지 2기간: (확보구간 + 차월가동금액) × 지급률")
+                    st.caption("💡 브릿지 2기간: (확보구간 + 당월가동금액) × 지급률")
                 else:
                     # 🌟 구간/브릿지1: 시상금 다중 항목 직접 읽기
                     st.markdown("**💰 시상금 항목 (여러 개 가능)**")
@@ -2335,3 +2335,4 @@ elif menu == "매니저 화면 (로그인)":
           except Exception as e:
             st.error(f"데이터 처리 중 오류가 발생했습니다: {e}")
             st.info("관리자 화면에서 설정을 확인해주세요.")
+
