@@ -247,6 +247,7 @@ def load_data_and_config():
     st.session_state['col_order'] = cfg.get('col_order', []) if isinstance(cfg.get('col_order'), list) else []
     st.session_state['merge_key1_col'] = str(cfg.get('merge_key1_col', ''))
     st.session_state['merge_key2_col'] = str(cfg.get('merge_key2_col', ''))
+    st.session_state['merge_key3_col'] = str(cfg.get('merge_key3_col', ''))
     st.session_state['col_groups'] = cfg.get('col_groups', []) if isinstance(cfg.get('col_groups'), list) else []
     st.session_state['data_date'] = str(cfg.get('data_date', ''))
     st.session_state['clip_footer'] = str(cfg.get('clip_footer', ''))
@@ -275,6 +276,7 @@ def _reset_session_state():
     st.session_state['col_order'] = []
     st.session_state['merge_key1_col'] = ''
     st.session_state['merge_key2_col'] = ''
+    st.session_state['merge_key3_col'] = ''
     st.session_state['col_groups'] = []
     st.session_state['data_date'] = ''
     st.session_state['clip_footer'] = ''
@@ -296,6 +298,7 @@ def save_config():
         'col_order': st.session_state.get('col_order', []),
         'merge_key1_col': st.session_state.get('merge_key1_col', ''),
         'merge_key2_col': st.session_state.get('merge_key2_col', ''),
+        'merge_key3_col': st.session_state.get('merge_key3_col', ''),
         'col_groups': st.session_state.get('col_groups', []),
         'data_date': st.session_state.get('data_date', ''),
         'clip_footer': st.session_state.get('clip_footer', ''),
@@ -1400,33 +1403,45 @@ if menu == "관리자 화면 (설정)":
     if has_data():
         st.success(f"✅ 현재 **{len(st.session_state['df_merged'])}행**의 데이터가 운영 중입니다. 새 파일을 업로드하면 데이터만 교체됩니다 (설정 유지).")
     
-    col_file1, col_file2 = st.columns(2)
-    with col_file1: file1 = st.file_uploader("첫 번째 파일 업로드", type=['csv', 'xlsx'])
-    with col_file2: file2 = st.file_uploader("두 번째 파일 업로드", type=['csv', 'xlsx'])
+    st.caption("📌 2~3개 파일을 업로드하여 설계사 코드 기준으로 합집합(outer merge)합니다. 세 번째 파일은 선택사항입니다.")
+    col_file1, col_file2, col_file3 = st.columns(3)
+    with col_file1: file1 = st.file_uploader("📁 첫 번째 파일", type=['csv', 'xlsx'], key="file1_upload")
+    with col_file2: file2 = st.file_uploader("📁 두 번째 파일", type=['csv', 'xlsx'], key="file2_upload")
+    with col_file3: file3 = st.file_uploader("📁 세 번째 파일 (선택)", type=['csv', 'xlsx'], key="file3_upload")
         
     if file1 is not None and file2 is not None:
         try:
             with st.spinner("파일을 읽고 있습니다..."):
                 df1 = load_file_data(file1.getvalue(), file1.name)
                 df2 = load_file_data(file2.getvalue(), file2.name)
+                df3 = load_file_data(file3.getvalue(), file3.name) if file3 is not None else None
             cols1 = df1.columns.tolist()
             cols2 = df2.columns.tolist()
+            cols3 = df3.columns.tolist() if df3 is not None else []
             
             prev_key1 = st.session_state.get('merge_key1_col', '')
             prev_key2 = st.session_state.get('merge_key2_col', '')
+            prev_key3 = st.session_state.get('merge_key3_col', '')
             idx1 = cols1.index(prev_key1) if prev_key1 in cols1 else 0
             idx2 = cols2.index(prev_key2) if prev_key2 in cols2 else 0
+            idx3 = cols3.index(prev_key3) if (cols3 and prev_key3 in cols3) else 0
             
             with st.form("merge_form"):
                 col_key1, col_key2 = st.columns(2)
-                with col_key1: key1 = st.selectbox("첫 번째 파일의 [설계사 코드] 열 선택", cols1, index=idx1)
-                with col_key2: key2 = st.selectbox("두 번째 파일의 [설계사 코드] 열 선택", cols2, index=idx2)
+                with col_key1: key1 = st.selectbox("파일1의 [설계사 코드] 열", cols1, index=idx1)
+                with col_key2: key2 = st.selectbox("파일2의 [설계사 코드] 열", cols2, index=idx2)
+                
+                if df3 is not None:
+                    key3 = st.selectbox("파일3의 [설계사 코드] 열", cols3, index=idx3)
+                else:
+                    key3 = None
                 
                 submit_merge = st.form_submit_button("🔄 데이터 병합 및 교체 (설정 유지)")
                 if submit_merge:
                     with st.spinner("데이터를 병합하고 저장 중입니다..."):
                         file_dates = []
-                        for f_obj in [file1, file2]:
+                        all_files = [file1, file2] + ([file3] if file3 is not None else [])
+                        for f_obj in all_files:
                             if f_obj.name.endswith('.xlsx'):
                                 try:
                                     import openpyxl
@@ -1441,10 +1456,12 @@ if menu == "관리자 화면 (설정)":
                         else:
                             st.session_state['data_date'] = datetime.now().strftime("%Y.%m.%d")
                         
+                        # ── 1단계: 파일1 + 파일2 outer merge ──
                         df1['merge_key1'] = df1[key1].apply(clean_key)
                         df2['merge_key2'] = df2[key2].apply(clean_key)
                         df_merged = pd.merge(df1, df2, left_on='merge_key1', right_on='merge_key2', how='outer', suffixes=('_파일1', '_파일2'))
                         
+                        # 중복 열 통합 (파일1+파일2)
                         cols_1 = [c for c in df_merged.columns if c.endswith('_파일1')]
                         for c1 in cols_1:
                             base = c1.replace('_파일1', '')
@@ -1453,13 +1470,37 @@ if menu == "관리자 화면 (설정)":
                                 df_merged[base] = df_merged[c1].combine_first(df_merged[c2])
                                 df_merged.drop(columns=[c1, c2], inplace=True)
                         
+                        # 통합 검색 키 (파일1+파일2)
                         df_merged['_unified_search_key'] = df_merged['merge_key1'].combine_first(df_merged['merge_key2'])
+                        
+                        # ── 2단계: 파일3이 있으면 추가 outer merge ──
+                        if df3 is not None and key3 is not None:
+                            df3['merge_key3'] = df3[key3].apply(clean_key)
+                            df_merged = pd.merge(df_merged, df3, left_on='_unified_search_key', right_on='merge_key3', how='outer', suffixes=('', '_파일3'))
+                            
+                            # 중복 열 통합 (기존 + 파일3)
+                            cols_3 = [c for c in df_merged.columns if c.endswith('_파일3')]
+                            for c3 in cols_3:
+                                base = c3.replace('_파일3', '')
+                                if base in df_merged.columns:
+                                    df_merged[base] = df_merged[base].combine_first(df_merged[c3])
+                                    df_merged.drop(columns=[c3], inplace=True)
+                                else:
+                                    df_merged.rename(columns={c3: base}, inplace=True)
+                            
+                            # 통합 검색 키 업데이트 (파일3 포함)
+                            if 'merge_key3' in df_merged.columns:
+                                df_merged['_unified_search_key'] = df_merged['_unified_search_key'].combine_first(df_merged['merge_key3'])
+                            
+                            st.session_state['merge_key3_col'] = key3
+                        else:
+                            st.session_state['merge_key3_col'] = ''
                         
                         st.session_state['merge_key1_col'] = key1
                         st.session_state['merge_key2_col'] = key2
                         st.session_state['df_merged'] = df_merged
                         
-                        new_cols = [c for c in df_merged.columns if c not in ['merge_key1', 'merge_key2']]
+                        new_cols = [c for c in df_merged.columns if c not in ['merge_key1', 'merge_key2', 'merge_key3']]
                         
                         if st.session_state['manager_col'] not in new_cols:
                             st.session_state['manager_col'] = ""
@@ -1496,7 +1537,9 @@ if menu == "관리자 화면 (설정)":
                         
                         save_data()
                         save_config()
-                        st.success(f"✅ 데이터 교체 완료! 총 {len(df_merged)}행 | 기존 설정이 유지되었습니다.")
+                        
+                        file_count = 3 if df3 is not None else 2
+                        st.success(f"✅ {file_count}개 파일 병합 완료! 총 {len(df_merged)}행 | 기존 설정이 유지되었습니다.")
                         st.rerun()
         except Exception as e:
             st.error(f"파일을 읽는 중 오류가 발생했습니다: {e}")
@@ -1512,7 +1555,7 @@ if menu == "관리자 화면 (설정)":
         for w in warnings:
             st.warning(w)
         df = st.session_state['df_merged']
-        available_columns = [c for c in df.columns if c not in ['merge_key1', 'merge_key2', '_unified_search_key']]
+        available_columns = [c for c in df.columns if c not in ['merge_key1', 'merge_key2', 'merge_key3', '_unified_search_key']]
         
         st.header("2. 📅 기준일 및 카톡 복사 문구 설정")
         with st.form("date_footer_form"):
@@ -1539,7 +1582,7 @@ if menu == "관리자 화면 (설정)":
             manager_col2_options = ["(없음 - 단일 열 사용)"] + available_columns
             prev_col2 = st.session_state.get('manager_col2', '')
             idx_col2 = manager_col2_options.index(prev_col2) if prev_col2 in manager_col2_options else 0
-            manager_col2 = st.selectbox("🔑 보조 [매니저 코드] 열 (파일2, 열 이름이 다를 때)", manager_col2_options, index=idx_col2)
+            manager_col2 = st.selectbox("🔑 보조 [매니저 코드] 열 (파일2/3, 열 이름이 다를 때)", manager_col2_options, index=idx_col2)
         
         col_m3, col_m4 = st.columns([8, 2])
         with col_m3:
