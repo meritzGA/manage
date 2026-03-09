@@ -423,13 +423,12 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
   text-align: center;
 }
 
-/* Template: Navy */
-#profile-card.template-navy .card-logo { color: white; }
-#profile-card.template-navy .card-header { background: var(--meritz-navy); }
-#profile-card.template-navy .card-name { color: #FFE08A; }
-#profile-card.template-navy .card-title { color: rgba(255,255,255,0.8); }
-#profile-card.template-navy .card-footer { background: var(--meritz-navy); }
-#profile-card.template-navy .card-divider { background: linear-gradient(90deg, var(--meritz-navy) 0%, #5C6BC0 50%, #9FA8DA 100%); }
+/* Template: White */
+#profile-card.template-white .card-header { background: white; }
+#profile-card.template-white .card-logo { color: var(--meritz-navy); }
+#profile-card.template-white .card-name { color: var(--meritz-red); }
+#profile-card.template-white .card-title { color: var(--gray-500); }
+#profile-card.template-white .card-footer { background: var(--meritz-navy); }
 
 /* Template: Gray */
 #profile-card.template-gray .card-logo { color: white; }
@@ -490,7 +489,7 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
       <h3>디자인 선택</h3>
       <div class="template-grid">
         <button class="template-btn active" onclick="setTemplate('default', this)">🔴 메리츠 레드</button>
-        <button class="template-btn" onclick="setTemplate('navy', this)">🔵 네이비</button>
+        <button class="template-btn" onclick="setTemplate('white', this)">⬜ 화이트</button>
         <button class="template-btn" onclick="setTemplate('gray', this)">⬛ 그레이</button>
       </div>
     </div>
