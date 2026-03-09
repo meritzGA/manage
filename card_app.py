@@ -553,7 +553,6 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
 
     <div class="action-btns">
       <button class="btn-download" onclick="downloadCard()">⬇️ 이미지로 저장 (PNG)</button>
-      <button class="btn-share" onclick="shareCard()">💬 카카오톡으로 공유</button>
     </div>
   </div>
 
