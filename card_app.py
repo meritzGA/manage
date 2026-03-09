@@ -410,35 +410,8 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
   display: none;
 }
 
-/* Bottom section */
-.card-bottom {
-  background: linear-gradient(135deg, #FFF5F7 0%, #FFE8EC 100%);
-  padding: 1rem 1.5rem;
-  display: flex;
-  gap: 1rem;
-  align-items: flex-start;
-}
-.card-bottom-photo {
-  width: 60px; height: 60px;
-  border-radius: 50%;
-  object-fit: cover;
-  flex-shrink: 0;
-  border: 3px solid white;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-}
-.card-bottom-photo-placeholder {
-  width: 60px; height: 60px;
-  border-radius: 50%;
-  background: white;
-  flex-shrink: 0;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 1.5rem;
-  border: 3px solid white;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-}
-.card-bottom-duties { flex: 1; }
-.card-bottom-duties .card-duties-title { font-size: 0.8rem; margin-bottom: 0.5rem; }
-.card-bottom-duties .card-duty-item { font-size: 0.78rem; margin-bottom: 0.3rem; }
+/* Bottom section - hidden globally */
+.card-bottom { display: none; }
 
 /* Footer */
 .card-footer {
@@ -450,14 +423,22 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
   text-align: center;
 }
 
-/* Template variations */
+/* Template: Navy */
 #profile-card.template-navy .card-logo { color: white; }
 #profile-card.template-navy .card-header { background: var(--meritz-navy); }
 #profile-card.template-navy .card-name { color: #FFE08A; }
 #profile-card.template-navy .card-title { color: rgba(255,255,255,0.8); }
+#profile-card.template-navy .card-footer { background: var(--meritz-navy); }
+#profile-card.template-navy .card-divider { background: linear-gradient(90deg, var(--meritz-navy) 0%, #5C6BC0 50%, #9FA8DA 100%); }
 
-#profile-card.template-minimal .card-bottom { display: none; }
-#profile-card.template-minimal .card-header { padding-bottom: 1.5rem; }
+/* Template: Gray */
+#profile-card.template-gray .card-logo { color: white; }
+#profile-card.template-gray .card-header { background: #424242; }
+#profile-card.template-gray .card-name { color: white; }
+#profile-card.template-gray .card-title { color: rgba(255,255,255,0.8); }
+#profile-card.template-gray .card-footer { background: #424242; }
+#profile-card.template-gray .card-divider { background: linear-gradient(90deg, #424242 0%, #757575 50%, #BDBDBD 100%); }
+#profile-card.template-gray .card-tagline { background: linear-gradient(135deg, #F5F5F5 0%, #EEEEEE 100%); border-left-color: #424242; }
 
 /* Loading overlay */
 .downloading {
@@ -509,8 +490,8 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
       <h3>디자인 선택</h3>
       <div class="template-grid">
         <button class="template-btn active" onclick="setTemplate('default', this)">🔴 메리츠 레드</button>
-        <button class="template-btn" onclick="setTemplate('navy', this)">🔵 네이비 다크</button>
-        <button class="template-btn" onclick="setTemplate('minimal', this)">⬜ 심플</button>
+        <button class="template-btn" onclick="setTemplate('navy', this)">🔵 네이비</button>
+        <button class="template-btn" onclick="setTemplate('gray', this)">⬛ 그레이</button>
       </div>
     </div>
 
