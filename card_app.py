@@ -426,7 +426,7 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
 /* Template: White */
 #profile-card.template-white .card-header { background: white; }
 #profile-card.template-white .card-logo { color: var(--meritz-navy); }
-#profile-card.template-white .card-name { color: var(--meritz-red); }
+#profile-card.template-white .card-name { color: var(--meritz-navy); }
 #profile-card.template-white .card-title { color: var(--gray-500); }
 #profile-card.template-white .card-footer { background: var(--meritz-navy); }
 
