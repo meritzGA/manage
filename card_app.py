@@ -271,14 +271,14 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
 }
 
 .card-header {
-  background: white;
+  background: var(--meritz-red);
   padding: 1.5rem 1.5rem 0;
   position: relative;
 }
 .card-logo {
   font-size: 1.4rem;
   font-weight: 900;
-  color: var(--meritz-navy);
+  color: white;
   letter-spacing: -0.5px;
   margin-bottom: 0.8rem;
 }
@@ -287,19 +287,13 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
 .card-name {
   font-size: 1.5rem;
   font-weight: 900;
-  color: var(--meritz-red);
+  color: white;
   line-height: 1.2;
   margin-bottom: 0.25rem;
 }
-.card-sub-name {
-  font-size: 1rem;
-  font-weight: 500;
-  color: #333;
-  margin-bottom: 0.2rem;
-}
 .card-title {
   font-size: 0.85rem;
-  color: var(--gray-500);
+  color: rgba(255,255,255,0.8);
   font-weight: 500;
 }
 .card-photo-wrap {
@@ -466,10 +460,10 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
 #profile-card.template-navy .card-logo { color: white; }
 #profile-card.template-navy .card-header { background: var(--meritz-navy); }
 #profile-card.template-navy .card-name { color: #FFE08A; }
-#profile-card.template-navy .card-sub-name,
 #profile-card.template-navy .card-title { color: rgba(255,255,255,0.8); }
 
 #profile-card.template-minimal .card-bottom { display: none; }
+#profile-card.template-minimal .card-branch { display: none; }
 #profile-card.template-minimal .card-header { padding-bottom: 1.5rem; }
 
 /* Loading overlay */
@@ -544,15 +538,15 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
       <h3>기본 정보</h3>
       <div class="field-group">
         <label>이름</label>
-        <input type="text" id="f_name" value="김은영" oninput="updateCard()" placeholder="이름 입력">
+        <input type="text" id="f_name" value="홍길동" oninput="updateCard()" placeholder="이름 입력">
       </div>
       <div class="field-group">
         <label>직책</label>
-        <input type="text" id="f_title" value="GA 설계매니저 (SM)" oninput="updateCard()" placeholder="예: GA 설계매니저">
+        <input type="text" id="f_title" value="AM 교육매니저" oninput="updateCard()" placeholder="예: GA 설계매니저">
       </div>
       <div class="field-group">
         <label>소속 지점</label>
-        <input type="text" id="f_branch" value="메리츠화재 호남GA본부 12지점" oninput="updateCard()" placeholder="예: 메리츠화재 서울GA본부">
+        <input type="text" id="f_branch" value="메리츠화재 GA3본부 2지점" oninput="updateCard()" placeholder="예: 메리츠화재 서울GA본부">
       </div>
     </div>
 
@@ -571,11 +565,11 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
       </div>
       <div class="field-group">
         <label>💛 카카오 ID</label>
-        <input type="text" id="f_kakao" value="@kykim" oninput="updateCard()" placeholder="@아이디">
+        <input type="text" id="f_kakao" value="@abcde" oninput="updateCard()" placeholder="@아이디">
       </div>
       <div class="field-group">
         <label>✉️ 이메일</label>
-        <input type="email" id="f_email" value="kykim@meritz.com" oninput="updateCard()" placeholder="이메일 주소">
+        <input type="email" id="f_email" value="abcde@meritz.com" oninput="updateCard()" placeholder="이메일 주소">
       </div>
     </div>
 
@@ -600,9 +594,8 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
         <div class="card-logo">MERITZ</div>
         <div class="card-hero">
           <div class="card-hero-text">
-            <div class="card-name" id="c_name">김은영</div>
-            <div class="card-sub-name" id="c_subname">메리츠 김은영</div>
-            <div class="card-title" id="c_title">GA 설계매니저</div>
+            <div class="card-name" id="c_name">홍길동</div>
+            <div class="card-title" id="c_title">AM 교육매니저</div>
           </div>
           <div class="card-photo-wrap" id="c_photoWrap">
             <div class="card-photo-placeholder">👤</div>
@@ -622,23 +615,23 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
       <div class="card-contact">
         <div class="card-qr" id="qrContainer"></div>
         <div class="card-contact-info">
-          <div class="card-contact-name" id="c_contactName">김은영 <small>GA설계매니저 (SM)</small></div>
+          <div class="card-contact-name" id="c_contactName">홍길동 <small>AM 교육매니저</small></div>
           <div class="contact-row">
             <div class="contact-icon icon-phone">📞</div>
             <span id="c_phone">010-1234-5678</span>
           </div>
           <div class="contact-row">
             <div class="contact-icon icon-kakao">💛</div>
-            <span id="c_kakao">@kykim</span>
+            <span id="c_kakao">@abcde</span>
           </div>
           <div class="contact-row">
             <div class="contact-icon icon-email">✉️</div>
-            <span id="c_email">kykim@meritz.com</span>
+            <span id="c_email">abcde@meritz.com</span>
           </div>
         </div>
       </div>
 
-      <div class="card-branch" id="c_branch">메리츠화재 호남GA본부 12지점</div>
+      <div class="card-branch" id="c_branch">메리츠화재 GA3본부 2지점</div>
 
       <div class="card-bottom" id="c_bottomSection">
         <div id="c_bottomPhoto">
@@ -650,7 +643,7 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
         </div>
       </div>
 
-      <div class="card-footer" id="c_footer">메리츠화재 호남GA본부 12지점</div>
+      <div class="card-footer" id="c_footer">메리츠화재 GA3본부 2지점</div>
     </div>
 
     <p style="font-size:0.78rem;color:#aaa;text-align:center;max-width:420px">
@@ -665,8 +658,8 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
 // Default duties
 const defaultDuties = [
   "보험 상품 포인트 정리 및 비교자료 제공",
-  "영업에 바로 활용할 수 있는 멘토 지원",
-  "보험료 변동 및 신상품 빠르게 전달"
+  "영업에 바로 활용할 수 있는 가입설계서 지원",
+  "보험료 변동 및 신상품 정보 빠르게 전달"
 ];
 
 let photoDataURL = null;
@@ -754,7 +747,6 @@ function updateCard() {
   const duties = getDuties();
 
   document.getElementById('c_name').textContent    = name;
-  document.getElementById('c_subname').textContent = '메리츠 ' + name;
   document.getElementById('c_title').textContent   = title;
   document.getElementById('c_tagline').textContent = tagline;
   document.getElementById('c_phone').textContent   = phone;
