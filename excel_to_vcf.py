@@ -44,7 +44,7 @@ def normalize_phone(raw):
     return s
 
 
-def to_vcard(name, phone, org=""):
+def to_vcard(name, phone, org="", nickname="", note=""):
     """단일 연락처를 vCard 3.0 문자열로 변환"""
     clean_phone = normalize_phone(phone)
     lines = [
@@ -57,6 +57,10 @@ def to_vcard(name, phone, org=""):
         lines.append(f"TEL;TYPE=CELL:{clean_phone}")
     if org:
         lines.append(f"ORG:{org}")
+    if nickname:
+        lines.append(f"NICKNAME:{nickname}")
+    if note:
+        lines.append(f"NOTE:{note}")
     lines.append("END:VCARD")
     return "\r\n".join(lines)
 
@@ -77,6 +81,8 @@ def create_sample_excel():
         "이름": ["홍길동", "김영희", "이철수"],
         "연락처": ["010-1234-5678", "010-9876-5432", "010-5555-7777"],
         "소속": ["메리츠화재 서울지점", "메리츠화재 부산지점", "메리츠화재 대전지점"],
+        "닉네임": ["길동이", "영희", "철수"],
+        "메모": ["서울 담당 매니저", "부산 신규 입사", "대전 우수 실적자"],
     })
     buf = io.BytesIO()
     df.to_excel(buf, index=False, engine="openpyxl")
@@ -88,6 +94,8 @@ def create_sample_excel():
 NAME_KEYS = ["이름", "성명", "name", "담당자"]
 PHONE_KEYS = ["연락처", "전화번호", "핸드폰", "휴대폰", "phone", "tel", "mobile", "번호"]
 ORG_KEYS = ["소속", "회사", "조직", "기관", "org", "company", "부서", "지점"]
+NICK_KEYS = ["닉네임", "별명", "별칭", "nickname", "nick", "애칭"]
+NOTE_KEYS = ["메모", "비고", "노트", "note", "memo", "참고", "기타"]
 
 
 # ── UI ──
@@ -143,6 +151,8 @@ if uploaded:
     auto_name = detect_column(headers, NAME_KEYS)
     auto_phone = detect_column(headers, PHONE_KEYS)
     auto_org = detect_column(headers, ORG_KEYS)
+    auto_nick = detect_column(headers, NICK_KEYS)
+    auto_note = detect_column(headers, NOTE_KEYS)
 
     options_with_none = ["— 선택 안함 —"] + headers
 
@@ -166,9 +176,25 @@ if uploaded:
             index=options_with_none.index(auto_org) if auto_org else 0,
         )
 
+    c4, c5 = st.columns(2)
+    with c4:
+        nick_col = st.selectbox(
+            "닉네임",
+            options=options_with_none,
+            index=options_with_none.index(auto_nick) if auto_nick else 0,
+        )
+    with c5:
+        note_col = st.selectbox(
+            "메모",
+            options=options_with_none,
+            index=options_with_none.index(auto_note) if auto_note else 0,
+        )
+
     name_col = None if name_col == "— 선택 안함 —" else name_col
     phone_col = None if phone_col == "— 선택 안함 —" else phone_col
     org_col = None if org_col == "— 선택 안함 —" else org_col
+    nick_col = None if nick_col == "— 선택 안함 —" else nick_col
+    note_col = None if note_col == "— 선택 안함 —" else note_col
 
     if not name_col or not phone_col:
         st.warning("이름과 연락처 컬럼을 선택해주세요.")
@@ -188,6 +214,10 @@ if uploaded:
     preview_cols = {name_col: "이름", "_전화번호": "연락처"}
     if org_col:
         preview_cols[org_col] = "소속"
+    if nick_col:
+        preview_cols[nick_col] = "닉네임"
+    if note_col:
+        preview_cols[note_col] = "메모"
 
     st.dataframe(
         valid_df[list(preview_cols.keys())].rename(columns=preview_cols).head(20),
@@ -205,8 +235,10 @@ if uploaded:
         name = str(row[name_col]) if pd.notna(row[name_col]) else ""
         phone = row[phone_col]
         org = str(row[org_col]) if org_col and pd.notna(row[org_col]) else ""
+        nickname = str(row[nick_col]) if nick_col and pd.notna(row[nick_col]) else ""
+        note = str(row[note_col]) if note_col and pd.notna(row[note_col]) else ""
         if name or phone:
-            vcards.append(to_vcard(name, phone, org))
+            vcards.append(to_vcard(name, phone, org, nickname, note))
 
     vcf_data = "\r\n".join(vcards)
 
@@ -229,7 +261,7 @@ st.markdown("---")
 st.markdown(
     """<div class="guide-box">
 💡 <b>사용 방법</b><br>
-<b>1.</b> 양식 다운로드 → 이름, 연락처, 소속 입력 후 저장<br>
+<b>1.</b> 양식 다운로드 → 이름, 연락처, 소속, 닉네임, 메모 입력 후 저장<br>
 <b>2.</b> 엑셀 파일 업로드 → 컬럼 자동 매핑 확인<br>
 <b>3.</b> VCF 파일 생성 → 다운로드<br>
 <b>4.</b> 핸드폰에서 .vcf 파일 열기 → 연락처 자동 저장<br><br>
