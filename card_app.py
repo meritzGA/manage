@@ -1,734 +1,869 @@
-import streamlit as st
-from PIL import Image, ImageDraw, ImageFont, ImageOps
-import qrcode
-import io
-import os
-import glob
-import subprocess
-
-# ─────────────────────────────────────────────
-# 페이지 설정
-# ─────────────────────────────────────────────
-st.set_page_config(
-    page_title="메리츠 프로필 카드 메이커",
-    page_icon="🪪",
-    layout="wide",
-)
-
-# ─────────────────────────────────────────────
-# 폰트 자동 탐색
-# ─────────────────────────────────────────────
-def _find_font(candidates):
-    """후보 경로 리스트에서 실제 존재하는 첫 번째 파일 반환"""
-    for path in candidates:
-        if os.path.isfile(path):
-            return path
-    # glob 탐색 (패키지 설치 경로가 다를 경우)
-    for pattern in [
-        "/usr/share/fonts/**/NotoSansCJK*.ttc",
-        "/usr/share/fonts/**/NotoSans*CJK*.ttc",
-        "/home/**/.fonts/NotoSans*.ttc",
-        "/usr/local/share/fonts/**/*.ttc",
-    ]:
-        results = glob.glob(pattern, recursive=True)
-        if results:
-            return results[0]
-    return None
-
-def _install_fonts():
-    """폰트가 없을 경우 apt로 설치 시도"""
-    try:
-        subprocess.run(
-            ["apt-get", "install", "-y", "-q", "fonts-noto-cjk"],
-            capture_output=True, timeout=120
-        )
-    except Exception:
-        pass
-
-# 후보 경로 (Streamlit Cloud, Ubuntu 다양한 버전 대응)
-_CANDIDATES_REG = [
-    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-    "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
-    "/usr/share/fonts/opentype/noto-cjk/NotoSansCJK-Regular.ttc",
-    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-]
-_CANDIDATES_BOLD = [p.replace("Regular", "Bold") for p in _CANDIDATES_REG]
-_CANDIDATES_BLACK = [p.replace("Regular", "Black") for p in _CANDIDATES_REG]
-
-FONT_REG   = _find_font(_CANDIDATES_REG)
-FONT_BOLD  = _find_font(_CANDIDATES_BOLD)
-FONT_BLACK = _find_font(_CANDIDATES_BLACK)
-
-# 없으면 설치 후 재탐색
-if not FONT_REG:
-    _install_fonts()
-    FONT_REG   = _find_font(_CANDIDATES_REG)
-    FONT_BOLD  = _find_font(_CANDIDATES_BOLD)
-    FONT_BLACK = _find_font(_CANDIDATES_BLACK)
-
-# 그래도 없으면 wqy (중국어 폰트지만 한글 일부 지원) fallback
-if not FONT_REG:
-    FONT_REG = FONT_BOLD = FONT_BLACK = (
-        glob.glob("/usr/share/fonts/**/*.ttc", recursive=True) +
-        glob.glob("/usr/share/fonts/**/*.ttf", recursive=True)
-    )[0] if glob.glob("/usr/share/fonts/**/*.ttc", recursive=True) else None
-
-KR_INDEX = 1  # NotoSansCJK TTC 내 한국어 인덱스
-
-def font(path, size, index=KR_INDEX):
-    if not path:
-        return ImageFont.load_default()
-    try:
-        return ImageFont.truetype(path, size, index=index)
-    except Exception:
-        try:
-            return ImageFont.truetype(path, size, index=0)
-        except Exception:
-            return ImageFont.load_default()
-
-# ─────────────────────────────────────────────
-# 색상 팔레트
-# ─────────────────────────────────────────────
-RED   = (200, 0,  30)
-RED_L = (255, 240, 242)
-NAVY  = (26,  35, 126)
-WHITE = (255, 255, 255)
-GRAY1 = (247, 247, 247)
-GRAY2 = (220, 220, 220)
-GRAY3 = (170, 170, 170)
-GRAY4 = (80,  80,  80)
-DARK  = (26,  26,  26)
-
-# ─────────────────────────────────────────────
-# 헬퍼: 텍스트 줄바꿈
-# ─────────────────────────────────────────────
-def wrap_text(draw, text, fnt, max_width):
-    """픽셀 너비 기준 자동 줄바꿈"""
-    words = list(text)  # 한글은 글자 단위로
-    lines, line = [], ""
-    for ch in text:
-        test = line + ch
-        w = draw.textlength(test, font=fnt)
-        if w > max_width and line:
-            lines.append(line)
-            line = ch
-        else:
-            line = test
-    if line:
-        lines.append(line)
-    return lines
-
-def draw_text_wrapped(draw, text, x, y, fnt, max_width, fill, line_spacing=8):
-    lines = wrap_text(draw, text, fnt, max_width)
-    cy = y
-    for line in lines:
-        draw.text((x, cy), line, font=fnt, fill=fill)
-        cy += fnt.size + line_spacing
-    return cy  # 마지막 y 반환
-
-def draw_rounded_rect(draw, xy, radius, fill, outline=None, outline_width=2):
-    x0, y0, x1, y1 = xy
-    draw.rounded_rectangle([x0, y0, x1, y1], radius=radius, fill=fill,
-                           outline=outline, width=outline_width if outline else 0)
-
-# ─────────────────────────────────────────────
-# QR 코드 생성
-# ─────────────────────────────────────────────
-def make_qr(phone, size=120):
-    phone_clean = phone.replace("-", "").replace(" ", "")
-    qr = qrcode.QRCode(
-        version=1,
-        error_correction=qrcode.constants.ERROR_CORRECT_M,
-        box_size=4,
-        border=2,
-    )
-    qr.add_data(f"tel:{phone_clean}" if phone_clean else "MERITZ")
-    qr.make(fit=True)
-    img = qr.make_image(fill_color=tuple(NAVY), back_color="white")
-    img = img.resize((size, size), Image.LANCZOS)
-    return img.convert("RGBA")
-
-# ─────────────────────────────────────────────
-# 사진 크롭 (원형 or 모서리 둥글게)
-# ─────────────────────────────────────────────
-def crop_photo(photo_bytes, w, h, circle=False):
-    img = Image.open(io.BytesIO(photo_bytes)).convert("RGBA")
-    # 비율 유지 크롭
-    img_ratio = img.width / img.height
-    target_ratio = w / h
-    if img_ratio > target_ratio:
-        new_w = int(img.height * target_ratio)
-        left = (img.width - new_w) // 2
-        img = img.crop((left, 0, left + new_w, img.height))
-    else:
-        new_h = int(img.width / target_ratio)
-        top = (img.height - new_h) // 2
-        img = img.crop((0, top, img.width, top + new_h))
-    img = img.resize((w, h), Image.LANCZOS)
-    if circle:
-        mask = Image.new("L", (w, h), 0)
-        ImageDraw.Draw(mask).ellipse([0, 0, w, h], fill=255)
-        img.putalpha(mask)
-    return img
-
-# ─────────────────────────────────────────────
-# ─── 카드 렌더러 ───────────────────────────
-# ─────────────────────────────────────────────
-
-def render_classic(data):
-    """클래식 레드 템플릿"""
-    W, H = 900, 1200
-    img = Image.new("RGB", (W, H), WHITE)
-    d = ImageDraw.Draw(img)
-
-    # ── 상단 헤더 배경 ──
-    header_h = 340
-    d.rectangle([0, 0, W, header_h], fill=RED)
-    # 장식 원
-    d.ellipse([W-180, -80, W+80, 180], fill=(220, 20, 50, 180))
-
-    # MERITZ 로고
-    fnt_logo = font(FONT_BLACK, 48)
-    d.text((50, 45), "MERITZ", font=fnt_logo, fill=WHITE)
-
-    # 이름
-    fnt_name = font(FONT_BLACK, 80)
-    d.text((50, 110), data["name"], font=fnt_name, fill=WHITE)
-
-    # 직책
-    fnt_role = font(FONT_BOLD, 32)
-    d.text((50, 205), data["title"], font=fnt_role,
-           fill=(255, 200, 200))
-
-    # 사진
-    photo_x, photo_y = W - 290, 60
-    photo_w, photo_h = 230, 275
-    if data["photo"]:
-        ph = crop_photo(data["photo"], photo_w, photo_h)
-        # 모서리 둥글게
-        mask = Image.new("L", (photo_w, photo_h), 0)
-        ImageDraw.Draw(mask).rounded_rectangle(
-            [0, 0, photo_w, photo_h], radius=18, fill=255)
-        img.paste(ph, (photo_x, photo_y), mask)
-    else:
-        d.rounded_rectangle(
-            [photo_x, photo_y, photo_x+photo_w, photo_y+photo_h],
-            radius=18, fill=(220, 30, 60))
-        fnt_icon = font(FONT_BOLD, 80)
-        d.text((photo_x + photo_w//2 - 35, photo_y + photo_h//2 - 45),
-               "👤", font=fnt_icon, fill=WHITE)
-
-    # ── 슬로건 박스 ──
-    q_y = header_h + 30
-    q_h = 100
-    d.rounded_rectangle([40, q_y, W-40, q_y+q_h], radius=14, fill=RED_L)
-    d.rectangle([40, q_y, 55, q_y+q_h], fill=RED)  # 왼쪽 바
-    fnt_q = font(FONT_BOLD, 30)
-    lines = wrap_text(d, data["tagline"], fnt_q, W - 140)
-    qtext = "\n".join(lines[:3])
-    d.text((75, q_y + 18), qtext, font=fnt_q, fill=NAVY)
-
-    # ── 업무 박스 ──
-    duty_y = q_y + q_h + 28
-    duty_lines = data["duties"]
-    duty_h = 55 + len(duty_lines) * 52
-    d.rounded_rectangle([40, duty_y, W-40, duty_y+duty_h],
-                        radius=14, fill=GRAY1)
-    fnt_dt = font(FONT_BOLD, 28)
-    d.text((70, duty_y + 18), "제 업무는요:", font=fnt_dt, fill=DARK)
-    fnt_di = font(FONT_REG, 27)
-    cy = duty_y + 60
-    for item in duty_lines:
-        d.text((72, cy), "✓", font=font(FONT_BLACK, 27), fill=RED)
-        d.text((108, cy), item, font=fnt_di, fill=GRAY4)
-        cy += 52
-
-    # ── 구분선 ──
-    stripe_y = duty_y + duty_h + 28
-    d.rectangle([0, stripe_y, W, stripe_y+8], fill=RED)
-
-    # ── 연락처 영역 ──
-    contact_y = stripe_y + 28
-    qr = make_qr(data["phone"], size=140)
-    img.paste(qr, (50, contact_y), qr)
-
-    info_x = 220
-    fnt_cn = font(FONT_BLACK, 34)
-    d.text((info_x, contact_y), data["name"], font=fnt_cn, fill=DARK)
-    fnt_ct = font(FONT_REG, 26)
-    d.text((info_x + d.textlength(data["name"], font=fnt_cn) + 14,
-            contact_y + 6), data["title"], font=fnt_ct, fill=GRAY3)
-
-    rows = [
-        ("📞", data["phone"]),
-        ("💛", data["kakao"]),
-        ("✉",  data["email"]),
-    ]
-    cy2 = contact_y + 52
-    fnt_row = font(FONT_REG, 26)
-    for icon, val in rows:
-        if val:
-            d.text((info_x, cy2), icon, font=font(FONT_REG, 26), fill=GRAY4)
-            d.text((info_x + 40, cy2), val, font=fnt_row, fill=GRAY4)
-            cy2 += 42
-
-    # ── 소속 푸터 ──
-    d.rectangle([0, H-80, W, H], fill=NAVY)
-    fnt_ft = font(FONT_BOLD, 30)
-    ft_w = d.textlength(data["branch"], font=fnt_ft)
-    d.text(((W - ft_w) // 2, H - 58), data["branch"], font=fnt_ft, fill=WHITE)
-
-    return img
-
-
-def render_bold(data):
-    """볼드 레드 템플릿"""
-    W, H = 900, 1200
-    img = Image.new("RGB", (W, H), WHITE)
-    d = ImageDraw.Draw(img)
-
-    header_h = 360
-
-    # 헤더
-    d.rectangle([0, 0, W, header_h], fill=RED)
-    # 장식
-    d.ellipse([-60, -60, 260, 260], fill=(220, 20, 50))
-    d.ellipse([W-200, header_h-140, W+60, header_h+60],
-              fill=(180, 0, 20))
-
-    # MERITZ
-    fnt_logo = font(FONT_BLACK, 38)
-    d.text((50, 42), "MERITZ", font=fnt_logo,
-           fill=(255, 255, 255, 160))
-
-    # 사진 (오른쪽, 헤더 하단에 걸침)
-    photo_w, photo_h = 220, 280
-    photo_x = W - photo_w - 40
-    photo_y = header_h - photo_h
-    if data["photo"]:
-        ph = crop_photo(data["photo"], photo_w, photo_h)
-        mask = Image.new("L", (photo_w, photo_h), 0)
-        ImageDraw.Draw(mask).rounded_rectangle(
-            [0, 0, photo_w, photo_h], radius=18, fill=255)
-        img.paste(ph, (photo_x, photo_y), mask)
-    else:
-        d.rounded_rectangle(
-            [photo_x, photo_y, photo_x+photo_w, photo_y+photo_h],
-            radius=18, fill=(180, 0, 20))
-
-    # 이름
-    fnt_name = font(FONT_BLACK, 90)
-    d.text((50, 110), data["name"], font=fnt_name, fill=WHITE)
-    fnt_role = font(FONT_BOLD, 30)
-    d.text((50, 215), data["title"], font=fnt_role, fill=(255, 180, 180))
-
-    # ── 바디 ──
-    body_y = header_h + 30
-
-    # 슬로건
-    d.rectangle([50, body_y, 58, body_y + 70], fill=RED)
-    fnt_q = font(FONT_BOLD, 30)
-    draw_text_wrapped(d, data["tagline"], 78, body_y + 4,
-                      fnt_q, W - 130, NAVY)
-
-    # 업무 박스
-    duty_y = body_y + 100
-    duty_h = 55 + len(data["duties"]) * 52
-    d.rounded_rectangle([40, duty_y, W-40, duty_y+duty_h],
-                        radius=14, fill=GRAY1)
-    fnt_dt = font(FONT_BOLD, 28)
-    d.text((70, duty_y + 18), "제 업무는요:", font=fnt_dt, fill=DARK)
-    fnt_di = font(FONT_REG, 27)
-    cy = duty_y + 60
-    for item in data["duties"]:
-        d.text((72, cy), "✓", font=font(FONT_BLACK, 27), fill=RED)
-        d.text((108, cy), item, font=fnt_di, fill=GRAY4)
-        cy += 52
-
-    # 구분선
-    sep_y = duty_y + duty_h + 28
-    d.rectangle([40, sep_y, W-40, sep_y+1], fill=GRAY2)
-
-    # 연락처
-    contact_y = sep_y + 24
-    qr = make_qr(data["phone"], size=130)
-    img.paste(qr, (50, contact_y), qr)
-
-    info_x = 210
-    fnt_cn = font(FONT_BLACK, 32)
-    d.text((info_x, contact_y), data["name"], font=fnt_cn, fill=DARK)
-    fnt_ct = font(FONT_REG, 24)
-    d.text((info_x + d.textlength(data["name"], font=fnt_cn) + 12,
-            contact_y + 6), data["title"], font=fnt_ct, fill=GRAY3)
-    cy2 = contact_y + 48
-    fnt_row = font(FONT_REG, 26)
-    for icon, val in [("📞", data["phone"]),
-                      ("💛", data["kakao"]),
-                      ("✉",  data["email"])]:
-        if val:
-            d.text((info_x, cy2), icon, font=fnt_row, fill=GRAY4)
-            d.text((info_x + 42, cy2), val, font=fnt_row, fill=GRAY4)
-            cy2 += 40
-
-    # 푸터
-    d.rectangle([0, H-80, W, H], fill=NAVY)
-    fnt_ft = font(FONT_BOLD, 30)
-    ft_w = d.textlength(data["branch"], font=fnt_ft)
-    d.text(((W - ft_w) // 2, H - 58), data["branch"], font=fnt_ft, fill=WHITE)
-
-    return img
-
-
-def render_elegant(data):
-    """엘레강트 네이비 템플릿"""
-    W, H = 900, 1200
-    img = Image.new("RGB", (W, H), WHITE)
-    d = ImageDraw.Draw(img)
-
-    header_h = 360
-    d.rectangle([0, 0, W, header_h], fill=NAVY)
-
-    # 장식 삼각형 그라디언트 느낌
-    d.polygon([(W//2, 0), (W, 0), (W, header_h)], fill=(200, 0, 30))
-    d.ellipse([-80, header_h-100, 160, header_h+140],
-              fill=(15, 25, 110))
-
-    # MERITZ
-    fnt_logo = font(FONT_BOLD, 34)
-    d.text((50, 42), "M E R I T Z", font=fnt_logo,
-           fill=(255, 255, 255, 120))
-
-    # 사진
-    photo_w, photo_h = 200, 250
-    photo_x = W - photo_w - 50
-    photo_y = 70
-    if data["photo"]:
-        ph = crop_photo(data["photo"], photo_w, photo_h)
-        mask = Image.new("L", (photo_w, photo_h), 0)
-        ImageDraw.Draw(mask).rounded_rectangle(
-            [0, 0, photo_w, photo_h], radius=14, fill=255)
-        img.paste(ph, (photo_x, photo_y), mask)
-        # 테두리
-        d.rounded_rectangle(
-            [photo_x-2, photo_y-2, photo_x+photo_w+2, photo_y+photo_h+2],
-            radius=15, outline=(255, 255, 255, 80), width=2)
-    else:
-        d.rounded_rectangle(
-            [photo_x, photo_y, photo_x+photo_w, photo_y+photo_h],
-            radius=14, fill=(35, 50, 150))
-
-    # 이름 (세리프 느낌 - Black 폰트)
-    fnt_name = font(FONT_BLACK, 76)
-    d.text((50, 110), data["name"], font=fnt_name, fill=WHITE)
-    fnt_role = font(FONT_REG, 28)
-    d.text((50, 202), data["title"], font=fnt_role,
-           fill=(180, 190, 255))
-
-    # 슬로건 인라인
-    fnt_qi = font(FONT_REG, 26)
-    tagline_quoted = '\u201c' + data['tagline'] + '\u201d'
-    d.text((52, 248), tagline_quoted, font=fnt_qi,
-           fill=(200, 210, 255))
-
-    # ── 바디 ──
-    body_y = header_h + 35
-
-    # 업무 목록
-    fnt_dt = font(FONT_BOLD, 26)
-    d.text((50, body_y), "주  요  업  무", font=fnt_dt, fill=GRAY3)
-    cy = body_y + 45
-    fnt_di = font(FONT_REG, 27)
-    for item in data["duties"]:
-        # 점 불릿
-        d.ellipse([52, cy+9, 62, cy+19], fill=RED)
-        d.text((80, cy), item, font=fnt_di, fill=GRAY4)
-        cy += 52
-
-    # 구분선
-    sep_y = cy + 20
-    d.rectangle([40, sep_y, W-40, sep_y+1], fill=GRAY2)
-
-    # 연락처
-    contact_y = sep_y + 30
-    qr = make_qr(data["phone"], size=130)
-    img.paste(qr, (50, contact_y), qr)
-    info_x = 210
-    fnt_cn = font(FONT_BLACK, 32)
-    d.text((info_x, contact_y), data["name"], font=fnt_cn, fill=DARK)
-    fnt_ct = font(FONT_REG, 24)
-    d.text((info_x + d.textlength(data["name"], font=fnt_cn) + 12,
-            contact_y + 6), data["title"], font=fnt_ct, fill=GRAY3)
-    cy2 = contact_y + 48
-    fnt_row = font(FONT_REG, 26)
-    for icon, val in [("📞", data["phone"]),
-                      ("💛", data["kakao"]),
-                      ("✉",  data["email"])]:
-        if val:
-            d.text((info_x, cy2), icon, font=fnt_row, fill=GRAY4)
-            d.text((info_x + 42, cy2), val, font=fnt_row, fill=GRAY4)
-            cy2 += 40
-
-    # 푸터
-    d.rectangle([0, H-80, W, H], fill=RED)
-    fnt_ft = font(FONT_BOLD, 30)
-    ft_w = d.textlength(data["branch"], font=fnt_ft)
-    d.text(((W - ft_w) // 2, H - 58), data["branch"], font=fnt_ft, fill=WHITE)
-
-    return img
-
-
-def render_minimal(data):
-    """미니멀 템플릿"""
-    W, H = 900, 1200
-    img = Image.new("RGB", (W, H), WHITE)
-    d = ImageDraw.Draw(img)
-
-    # 왼쪽 레드 세로 바
-    d.rectangle([0, 0, 10, H], fill=RED)
-
-    # MERITZ
-    fnt_logo = font(FONT_BLACK, 28)
-    d.text((50, 50), "MERITZ", font=fnt_logo, fill=RED)
-
-    # 이름
-    fnt_name = font(FONT_BLACK, 88)
-    d.text((50, 110), data["name"], font=fnt_name, fill=DARK)
-
-    # 직책
-    fnt_role = font(FONT_REG, 30)
-    d.text((50, 215), data["title"], font=fnt_role, fill=GRAY3)
-
-    # 사진
-    if data["photo"]:
-        photo_w, photo_h = 210, 250
-        photo_x = W - photo_w - 50
-        photo_y = 60
-        ph = crop_photo(data["photo"], photo_w, photo_h)
-        mask = Image.new("L", (photo_w, photo_h), 0)
-        ImageDraw.Draw(mask).rounded_rectangle(
-            [0, 0, photo_w, photo_h], radius=14, fill=255)
-        img.paste(ph, (photo_x, photo_y), mask)
-
-    # 슬로건
-    q_y = 310
-    d.rounded_rectangle([40, q_y, W-40, q_y+90], radius=12, fill=GRAY1)
-    fnt_q = font(FONT_BOLD, 28)
-    draw_text_wrapped(d, data["tagline"], 65, q_y + 22,
-                      fnt_q, W - 130, GRAY4)
-
-    # 구분선
-    sep1 = q_y + 110
-    d.rectangle([40, sep1, W-40, sep1+1], fill=GRAY2)
-
-    # 업무
-    duty_y = sep1 + 30
-    fnt_dt = font(FONT_BOLD, 24)
-    d.text((50, duty_y), "업 무 소 개", font=fnt_dt, fill=RED)
-    cy = duty_y + 48
-    fnt_di = font(FONT_REG, 27)
-    for i, item in enumerate(data["duties"]):
-        num = f"{i+1:02d}"
-        d.text((50, cy), num, font=font(FONT_BLACK, 26), fill=RED)
-        d.text((90, cy), item, font=fnt_di, fill=GRAY4)
-        cy += 52
-
-    # 연락처 박스
-    box_y = cy + 30
-    d.rounded_rectangle([40, box_y, W-40, box_y+180],
-                        radius=14, outline=GRAY2, width=2, fill=WHITE)
-    qr = make_qr(data["phone"], size=120)
-    img.paste(qr, (60, box_y + 30), qr)
-    info_x = 210
-    fnt_cn = font(FONT_BLACK, 30)
-    d.text((info_x, box_y + 28), data["name"], font=fnt_cn, fill=DARK)
-    fnt_ct = font(FONT_REG, 22)
-    d.text((info_x + d.textlength(data["name"], font=fnt_cn) + 10,
-            box_y + 34), data["title"], font=fnt_ct, fill=GRAY3)
-    cy2 = box_y + 70
-    fnt_row = font(FONT_REG, 24)
-    for icon, val in [("📞", data["phone"]),
-                      ("💛", data["kakao"]),
-                      ("✉",  data["email"])]:
-        if val:
-            d.text((info_x, cy2), icon, font=fnt_row, fill=GRAY4)
-            d.text((info_x + 38, cy2), val, font=fnt_row, fill=GRAY4)
-            cy2 += 36
-
-    # 푸터
-    d.rectangle([0, H-80, W, H], fill=NAVY)
-    fnt_ft = font(FONT_BOLD, 30)
-    ft_w = d.textlength(data["branch"], font=fnt_ft)
-    d.text(((W - ft_w) // 2, H - 58), data["branch"], font=fnt_ft, fill=WHITE)
-
-    return img
-
-
-RENDERERS = {
-    "🔴 클래식 레드": render_classic,
-    "🔥 볼드 레드":   render_bold,
-    "💎 엘레강트":    render_elegant,
-    "⬜ 미니멀":      render_minimal,
-}
-
-
-def img_to_bytes(img):
-    buf = io.BytesIO()
-    img.save(buf, format="PNG", dpi=(300, 300))
-    return buf.getvalue()
-
-
-# ─────────────────────────────────────────────
-# CSS
-# ─────────────────────────────────────────────
-st.markdown("""
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>메리츠 프로필 카드 생성기</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700;900&display=swap');
-
-html, body, [class*="css"] { font-family: 'Noto Sans KR', sans-serif; }
-
-.main-title {
-    background: #1A237E;
-    color: white;
-    padding: 1rem 1.5rem;
-    border-radius: 12px;
-    margin-bottom: 1.5rem;
-    display: flex; align-items: center; gap: .75rem;
+:root {
+  --meritz-red: #C8001E;
+  --meritz-navy: #1A237E;
+  --meritz-pink: #FFE4E8;
+  --meritz-light: #FFF5F7;
+  --gray-50: #FAFAFA;
+  --gray-200: #EEEEEE;
+  --gray-500: #9E9E9E;
+  --gray-700: #424242;
 }
-.main-title h1 { font-size: 1.3rem; margin: 0; font-weight: 900; }
-.main-title p  { font-size: .8rem; margin: 0; opacity: .7; }
 
-.section-head {
-    font-size: .7rem; font-weight: 700;
-    letter-spacing: 1.5px; text-transform: uppercase;
-    color: #AAA; border-bottom: 1px solid #EEE;
-    padding-bottom: .4rem; margin: 1.2rem 0 .75rem;
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'Noto Sans KR', sans-serif;
+  background: #F0F0F5;
+  min-height: 100vh;
 }
-div[data-testid="stDownloadButton"] button {
-    width: 100%;
-    background: #C8001E !important;
-    color: white !important;
-    font-weight: 700 !important;
-    font-size: 1rem !important;
-    border: none !important;
-    border-radius: 10px !important;
-    padding: .8rem !important;
+
+/* ─── HEADER ─── */
+.site-header {
+  background: var(--meritz-navy);
+  color: white;
+  padding: 1rem 2rem;
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.2);
 }
-div[data-testid="stDownloadButton"] button:hover {
-    background: #A0001A !important;
+.site-header .logo {
+  font-size: 1.5rem;
+  font-weight: 900;
+  color: white;
+  letter-spacing: -0.5px;
+}
+.site-header .logo span { color: #FEE500; }
+.site-header p { font-size: 0.85rem; color: rgba(255,255,255,0.7); }
+
+/* ─── LAYOUT ─── */
+.main-layout {
+  display: grid;
+  grid-template-columns: 420px 1fr;
+  gap: 2rem;
+  max-width: 1300px;
+  margin: 2rem auto;
+  padding: 0 2rem;
+}
+
+/* ─── FORM PANEL ─── */
+.form-panel {
+  background: white;
+  border-radius: 16px;
+  padding: 2rem;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+  height: fit-content;
+  position: sticky;
+  top: 1rem;
+}
+.form-panel h2 {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--meritz-navy);
+  margin-bottom: 1.5rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 2px solid var(--meritz-red);
+}
+
+.form-section {
+  margin-bottom: 1.5rem;
+}
+.form-section h3 {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--gray-500);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 0.75rem;
+}
+
+.field-group { margin-bottom: 0.9rem; }
+label {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--gray-700);
+  margin-bottom: 0.3rem;
+}
+input[type="text"], input[type="tel"], input[type="email"], textarea, select {
+  width: 100%;
+  padding: 0.6rem 0.9rem;
+  border: 1.5px solid var(--gray-200);
+  border-radius: 8px;
+  font-family: 'Noto Sans KR', sans-serif;
+  font-size: 0.88rem;
+  color: var(--gray-700);
+  transition: border-color 0.2s;
+  background: var(--gray-50);
+}
+input:focus, textarea:focus {
+  outline: none;
+  border-color: var(--meritz-red);
+  background: white;
+}
+textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
+
+/* Photo Upload */
+.photo-upload-area {
+  border: 2px dashed var(--gray-200);
+  border-radius: 12px;
+  padding: 1.2rem;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: var(--gray-50);
+  position: relative;
+}
+.photo-upload-area:hover { border-color: var(--meritz-red); background: var(--meritz-light); }
+.photo-upload-area input[type="file"] {
+  position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+}
+.photo-preview {
+  width: 80px; height: 80px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 3px solid var(--meritz-red);
+  margin: 0 auto 0.5rem;
+  display: none;
+}
+.photo-icon { font-size: 2rem; margin-bottom: 0.3rem; }
+.photo-upload-area p { font-size: 0.8rem; color: var(--gray-500); }
+
+/* Duties */
+.duty-list { display: flex; flex-direction: column; gap: 0.4rem; }
+.duty-item {
+  display: flex; align-items: center; gap: 0.5rem;
+}
+.duty-item input[type="text"] { flex: 1; }
+.duty-item .del-btn {
+  width: 28px; height: 28px;
+  background: #FFEBEE; color: var(--meritz-red);
+  border: none; border-radius: 6px;
+  cursor: pointer; font-size: 1rem;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.add-duty-btn {
+  margin-top: 0.5rem;
+  padding: 0.4rem 0.8rem;
+  background: var(--meritz-light);
+  color: var(--meritz-red);
+  border: 1.5px dashed var(--meritz-red);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 600;
+  width: 100%;
+  transition: all 0.2s;
+}
+.add-duty-btn:hover { background: #FFD6DA; }
+
+/* Template selector */
+.template-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+}
+.template-btn {
+  padding: 0.6rem;
+  border: 2px solid var(--gray-200);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-align: center;
+  transition: all 0.2s;
+  background: white;
+}
+.template-btn.active { border-color: var(--meritz-red); background: var(--meritz-light); color: var(--meritz-red); }
+
+/* Action Buttons */
+.action-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+.btn-download {
+  padding: 0.9rem;
+  background: var(--meritz-red);
+  color: white;
+  border: none;
+  border-radius: 10px;
+  font-size: 1rem;
+  font-weight: 700;
+  font-family: 'Noto Sans KR', sans-serif;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex; align-items: center; justify-content: center; gap: 0.5rem;
+}
+.btn-download:hover { background: #A0001A; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(200,0,30,0.3); }
+.btn-share {
+  padding: 0.75rem;
+  background: #FEE500;
+  color: #1A1A1A;
+  border: none;
+  border-radius: 10px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  font-family: 'Noto Sans KR', sans-serif;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex; align-items: center; justify-content: center; gap: 0.5rem;
+}
+.btn-share:hover { background: #F0D800; }
+
+/* ─── PREVIEW PANEL ─── */
+.preview-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+}
+.preview-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--gray-500);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+/* ─── CARD ─── */
+#profile-card {
+  width: 420px;
+  background: white;
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.15);
+  font-family: 'Noto Sans KR', sans-serif;
+}
+
+/* Card Header */
+.card-header {
+  background: white;
+  padding: 1.5rem 1.5rem 0;
+  position: relative;
+}
+.card-logo {
+  font-size: 1.4rem;
+  font-weight: 900;
+  color: var(--meritz-navy);
+  letter-spacing: -0.5px;
+  margin-bottom: 0.8rem;
+}
+.card-hero {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+}
+.card-hero-text {
+  flex: 1;
+}
+.card-name {
+  font-size: 1.5rem;
+  font-weight: 900;
+  color: var(--meritz-red);
+  line-height: 1.2;
+  margin-bottom: 0.25rem;
+}
+.card-sub-name {
+  font-size: 1rem;
+  font-weight: 500;
+  color: #333;
+  margin-bottom: 0.2rem;
+}
+.card-title {
+  font-size: 0.85rem;
+  color: var(--gray-500);
+  font-weight: 500;
+}
+.card-photo-wrap {
+  width: 110px;
+  height: 130px;
+  border-radius: 12px;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: linear-gradient(135deg, #f0f0f0 0%, #e0e0e0 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.card-photo-wrap img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+}
+.card-photo-placeholder {
+  font-size: 2.5rem;
+  color: #ccc;
+}
+
+/* Tagline */
+.card-tagline {
+  margin: 1rem 1.5rem;
+  background: linear-gradient(135deg, #FFF0F2 0%, #FFE8EC 100%);
+  border-radius: 10px;
+  padding: 0.9rem 1.1rem;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--meritz-navy);
+  line-height: 1.5;
+  border-left: 4px solid var(--meritz-red);
+}
+.card-tagline::before { content: '"'; color: var(--meritz-red); font-size: 1.2rem; }
+.card-tagline::after  { content: '"'; color: var(--meritz-red); font-size: 1.2rem; }
+
+/* Duties */
+.card-duties {
+  margin: 0 1.5rem 1rem;
+  background: #FAFAFA;
+  border-radius: 10px;
+  padding: 1rem 1.1rem;
+}
+.card-duties-title {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #333;
+  margin-bottom: 0.7rem;
+}
+.card-duty-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  color: #555;
+  margin-bottom: 0.45rem;
+  line-height: 1.4;
+}
+.card-duty-check {
+  color: var(--meritz-red);
+  font-weight: 700;
+  font-size: 0.9rem;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+/* Divider */
+.card-divider {
+  height: 6px;
+  background: linear-gradient(90deg, var(--meritz-red) 0%, #FF6B6B 50%, #FFB3B3 100%);
+}
+
+/* Contact Section */
+.card-contact {
+  padding: 1.2rem 1.5rem;
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+}
+.card-qr {
+  width: 80px;
+  height: 80px;
+  flex-shrink: 0;
+  border: 2px solid var(--gray-200);
+  border-radius: 8px;
+  overflow: hidden;
+  background: white;
+}
+.card-qr canvas { width: 80px !important; height: 80px !important; }
+.card-qr img { width: 80px !important; height: 80px !important; }
+.card-contact-info { flex: 1; }
+.card-contact-name {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #222;
+  margin-bottom: 0.5rem;
+}
+.card-contact-name small {
+  font-size: 0.75rem;
+  color: var(--gray-500);
+  font-weight: 400;
+  margin-left: 0.4rem;
+}
+.contact-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  color: #444;
+  margin-bottom: 0.3rem;
+}
+.contact-icon {
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.7rem;
+  flex-shrink: 0;
+}
+.icon-phone { background: #E3F2FD; color: #1565C0; }
+.icon-kakao { background: #FEE500; color: #1A1A1A; }
+.icon-email { background: #FCE4EC; color: var(--meritz-red); }
+
+/* Branch */
+.card-branch {
+  background: var(--meritz-navy);
+  color: white;
+  padding: 0.7rem 1.5rem;
+  font-size: 0.82rem;
+  font-weight: 500;
+  text-align: center;
+  letter-spacing: 0.3px;
+}
+
+/* Mini photo bottom */
+.card-bottom {
+  background: linear-gradient(135deg, #FFF5F7 0%, #FFE8EC 100%);
+  padding: 1rem 1.5rem;
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+}
+.card-bottom-photo {
+  width: 60px; height: 60px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 3px solid white;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+.card-bottom-photo-placeholder {
+  width: 60px; height: 60px;
+  border-radius: 50%;
+  background: white;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  border: 3px solid white;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+.card-bottom-duties { flex: 1; }
+.card-bottom-duties .card-duties-title { font-size: 0.8rem; margin-bottom: 0.5rem; }
+.card-bottom-duties .card-duty-item { font-size: 0.78rem; margin-bottom: 0.3rem; }
+
+/* Bottom footer */
+.card-footer {
+  background: var(--meritz-red);
+  color: white;
+  padding: 0.6rem 1.5rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-align: center;
+}
+
+/* Template variations */
+#profile-card.template-navy .card-logo { color: white; }
+#profile-card.template-navy .card-header { background: var(--meritz-navy); }
+#profile-card.template-navy .card-name { color: #FFE08A; }
+#profile-card.template-navy .card-sub-name, #profile-card.template-navy .card-title { color: rgba(255,255,255,0.8); }
+
+#profile-card.template-minimal .card-bottom { display: none; }
+#profile-card.template-minimal .card-header { padding-bottom: 1.5rem; }
+
+/* Loading overlay */
+.downloading {
+  position: fixed; inset: 0;
+  background: rgba(26,35,126,0.85);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  z-index: 1000; color: white;
+  font-size: 1.2rem; font-weight: 700;
+  gap: 1rem; display: none;
+}
+.spinner {
+  width: 48px; height: 48px;
+  border: 5px solid rgba(255,255,255,0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 900px) {
+  .main-layout { grid-template-columns: 1fr; }
+  .form-panel { position: static; }
+  #profile-card { width: 100%; max-width: 420px; }
 }
 </style>
-""", unsafe_allow_html=True)
+</head>
+<body>
 
-# ─────────────────────────────────────────────
-# UI
-# ─────────────────────────────────────────────
-st.markdown("""
-<div class="main-title">
-  <div>🪪</div>
-  <div>
-    <h1>메리츠 프로필 카드 메이커</h1>
-    <p>GA 설계매니저 명함형 프로필 이미지 생성기</p>
-  </div>
+<div class="downloading" id="downloadOverlay">
+  <div class="spinner"></div>
+  <span>이미지 생성 중...</span>
 </div>
-""", unsafe_allow_html=True)
 
-col_form, col_preview = st.columns([1, 1], gap="large")
+<header class="site-header">
+  <div>
+    <div class="logo">MERITZ <span>PROFILE</span></div>
+    <p>GA 설계매니저 프로필 카드 생성기</p>
+  </div>
+</header>
 
-# ─────────────────────────────────────────────
-# 왼쪽: 입력 폼
-# ─────────────────────────────────────────────
-with col_form:
+<div class="main-layout">
 
-    st.markdown('<div class="section-head">① 템플릿 선택</div>',
-                unsafe_allow_html=True)
-    template = st.radio(
-        "템플릿", list(RENDERERS.keys()),
-        horizontal=True, label_visibility="collapsed"
-    )
+  <!-- ─── FORM PANEL ─── -->
+  <div class="form-panel">
+    <h2>📝 정보 입력</h2>
 
-    st.markdown('<div class="section-head">② 사진 (선택)</div>',
-                unsafe_allow_html=True)
-    photo_file = st.file_uploader(
-        "사진 업로드", type=["jpg", "jpeg", "png"],
-        label_visibility="collapsed"
-    )
-    photo_bytes = photo_file.read() if photo_file else None
+    <!-- 템플릿 선택 -->
+    <div class="form-section">
+      <h3>디자인 선택</h3>
+      <div class="template-grid">
+        <button class="template-btn active" onclick="setTemplate('default', this)">🔴 메리츠 레드</button>
+        <button class="template-btn" onclick="setTemplate('navy', this)">🔵 네이비 다크</button>
+        <button class="template-btn" onclick="setTemplate('minimal', this)">⬜ 심플</button>
+      </div>
+    </div>
 
-    st.markdown('<div class="section-head">③ 기본 정보</div>',
-                unsafe_allow_html=True)
-    name   = st.text_input("이름",   value="홍길동")
-    title  = st.text_input("직책",   value="설계매니저")
-    branch = st.text_input("소속 지점", value="메리츠화재 GA3-2지점")
+    <!-- 사진 -->
+    <div class="form-section">
+      <h3>프로필 사진 (선택)</h3>
+      <div class="photo-upload-area" id="uploadArea">
+        <input type="file" id="photoInput" accept="image/*" onchange="handlePhoto(this)">
+        <img class="photo-preview" id="photoPreview" src="" alt="미리보기">
+        <div id="photoPlaceholder">
+          <div class="photo-icon">📷</div>
+          <p>사진을 클릭하여 업로드<br><small>JPG, PNG · 업로드 안 해도 됩니다</small></p>
+        </div>
+      </div>
+      <button onclick="removePhoto()" id="removePhotoBtn" style="display:none;margin-top:0.4rem;width:100%;padding:0.4rem;background:#FFF;border:1px solid #ccc;border-radius:6px;cursor:pointer;font-size:0.8rem;color:#999">사진 제거</button>
+    </div>
 
-    st.markdown('<div class="section-head">④ 슬로건 / 한마디</div>',
-                unsafe_allow_html=True)
-    tagline = st.text_area(
-        "슬로건", value="팀장님 영업에 도움이 되는 설계매니저 되겠습니다.",
-        height=80, label_visibility="collapsed"
-    )
+    <!-- 기본 정보 -->
+    <div class="form-section">
+      <h3>기본 정보</h3>
+      <div class="field-group">
+        <label>이름</label>
+        <input type="text" id="f_name" value="김은영" oninput="updateCard()" placeholder="이름 입력">
+      </div>
+      <div class="field-group">
+        <label>직책</label>
+        <input type="text" id="f_title" value="GA 설계매니저 (SM)" oninput="updateCard()" placeholder="예: GA 설계매니저">
+      </div>
+      <div class="field-group">
+        <label>소속 지점</label>
+        <input type="text" id="f_branch" value="메리츠화재 호남GA본부 12지점" oninput="updateCard()" placeholder="예: 메리츠화재 서울GA본부">
+      </div>
+    </div>
 
-    st.markdown('<div class="section-head">⑤ 연락처</div>',
-                unsafe_allow_html=True)
-    phone = st.text_input("📞 전화번호", value="010-1234-5678")
-    kakao = st.text_input("💛 카카오 ID", value="@abcdef")
-    email = st.text_input("✉️ 이메일",   value="abcdef@meritz.com")
+    <!-- 한마디 -->
+    <div class="form-section">
+      <h3>슬로건 / 한마디</h3>
+      <div class="field-group">
+        <textarea id="f_tagline" oninput="updateCard()" placeholder="예: 팀장님 영업에 도움이 되는 설계매니저 되겠습니다.">팀장님 영업에 도움이 되는 설계매니저 되겠습니다.</textarea>
+      </div>
+    </div>
 
-    st.markdown('<div class="section-head">⑥ 제 업무는요 (최대 5개)</div>',
-                unsafe_allow_html=True)
+    <!-- 연락처 -->
+    <div class="form-section">
+      <h3>연락처</h3>
+      <div class="field-group">
+        <label>📞 전화번호</label>
+        <input type="tel" id="f_phone" value="010-1234-5678" oninput="updateCard(); updateQR()" placeholder="010-0000-0000">
+      </div>
+      <div class="field-group">
+        <label>💛 카카오 ID</label>
+        <input type="text" id="f_kakao" value="@kykim" oninput="updateCard()" placeholder="@아이디">
+      </div>
+      <div class="field-group">
+        <label>✉️ 이메일</label>
+        <input type="email" id="f_email" value="kykim@meritz.com" oninput="updateCard()" placeholder="이메일 주소">
+      </div>
+    </div>
 
-    default_duties = [
-        "보험 상품 포인트 정리 및 화법 제공",
-        "영업에 바로 활용할 수 있는 가입설계서 지원",
-        "보험료 변동 및 신상품 정보 빠르게 전달",
-    ]
-    duties = []
-    for i in range(5):
-        default = default_duties[i] if i < len(default_duties) else ""
-        val = st.text_input(
-            f"업무 {i+1}", value=default,
-            placeholder=f"업무 항목 {i+1} (비워두면 표시 안 됨)",
-            label_visibility="collapsed" if i > 0 else "visible"
-        )
-        if val.strip():
-            duties.append(val.strip())
+    <!-- 업무 소개 -->
+    <div class="form-section">
+      <h3>제 업무는요 <small style="font-weight:400;text-transform:none;font-size:0.75rem;color:#aaa">(최대 5개)</small></h3>
+      <div class="duty-list" id="dutyList"></div>
+      <button class="add-duty-btn" onclick="addDuty()">+ 항목 추가</button>
+    </div>
 
-# ─────────────────────────────────────────────
-# 카드 데이터
-# ─────────────────────────────────────────────
-card_data = {
-    "name":    name   or "이름",
-    "title":   title  or "직책",
-    "branch":  branch or "소속지점",
-    "tagline": tagline or "",
-    "phone":   phone,
-    "kakao":   kakao,
-    "email":   email,
-    "duties":  duties or ["업무 내용을 입력해주세요"],
-    "photo":   photo_bytes,
+    <!-- 다운로드 -->
+    <div class="action-btns">
+      <button class="btn-download" onclick="downloadCard()">
+        ⬇️ 이미지로 저장 (PNG)
+      </button>
+      <button class="btn-share" onclick="shareCard()">
+        💬 카카오톡으로 공유
+      </button>
+    </div>
+  </div>
+
+  <!-- ─── PREVIEW PANEL ─── -->
+  <div class="preview-panel">
+    <p class="preview-label">실시간 미리보기</p>
+
+    <!-- THE CARD -->
+    <div id="profile-card">
+
+      <div class="card-header">
+        <div class="card-logo">MERITZ</div>
+        <div class="card-hero">
+          <div class="card-hero-text">
+            <div class="card-name" id="c_name">김은영</div>
+            <div class="card-sub-name" id="c_subname">메리츠 김은영</div>
+            <div class="card-title" id="c_title">GA 설계매니저</div>
+          </div>
+          <div class="card-photo-wrap" id="c_photoWrap">
+            <div class="card-photo-placeholder">👤</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card-tagline" id="c_tagline">
+        팀장님 영업에 도움이 되는 설계매니저 되겠습니다.
+      </div>
+
+      <div class="card-duties">
+        <div class="card-duties-title">제 업무는요:</div>
+        <div id="c_duties"></div>
+      </div>
+
+      <div class="card-divider"></div>
+
+      <div class="card-contact">
+        <div class="card-qr" id="qrContainer"></div>
+        <div class="card-contact-info">
+          <div class="card-contact-name" id="c_contactName">
+            김은영 <small>GA설계매니저 (SM)</small>
+          </div>
+          <div class="contact-row">
+            <div class="contact-icon icon-phone">📞</div>
+            <span id="c_phone">010-1234-5678</span>
+          </div>
+          <div class="contact-row">
+            <div class="contact-icon icon-kakao">💛</div>
+            <span id="c_kakao">@kykim</span>
+          </div>
+          <div class="contact-row">
+            <div class="contact-icon icon-email">✉️</div>
+            <span id="c_email"><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="2f44564446426f424a5d465b55014c4042">[email&#160;protected]</a></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card-branch" id="c_branch">메리츠화재 호남GA본부 12지점</div>
+
+      <div class="card-bottom" id="c_bottomSection">
+        <div id="c_bottomPhoto">
+          <div class="card-bottom-photo-placeholder">👤</div>
+        </div>
+        <div class="card-bottom-duties">
+          <div class="card-duties-title">제 업무는요:</div>
+          <div id="c_bottomDuties"></div>
+        </div>
+      </div>
+
+      <div class="card-footer" id="c_footer">메리츠화재 호남GA본부 12지점</div>
+
+    </div>
+    <!-- END CARD -->
+
+    <p style="font-size:0.78rem;color:#aaa;text-align:center;max-width:420px">
+      💡 정보를 입력하면 카드가 실시간으로 업데이트됩니다<br>
+      다운로드 버튼을 눌러 PNG 이미지로 저장하세요
+    </p>
+  </div>
+
+</div>
+
+<script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script>
+// ─── Default duties ───
+const defaultDuties = [
+  "보험 상품 포인토 정리 및 비교자료 제공",
+  "영업에 바로 활용할 수 있는 멘토 지원",
+  "보험로 번등 및 신상품 빠르게 전달"
+];
+
+let photoDataURL = null;
+let qrInstance = null;
+let currentTemplate = 'default';
+
+// ─── Init ───
+window.addEventListener('DOMContentLoaded', () => {
+  defaultDuties.forEach(d => addDuty(d));
+  updateCard();
+  updateQR();
+});
+
+// ─── Photo handling ───
+function handlePhoto(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    photoDataURL = e.target.result;
+    document.getElementById('photoPreview').src = photoDataURL;
+    document.getElementById('photoPreview').style.display = 'block';
+    document.getElementById('photoPlaceholder').style.display = 'none';
+    document.getElementById('removePhotoBtn').style.display = 'block';
+    updateCard();
+  };
+  reader.readAsDataURL(file);
 }
 
-# ─────────────────────────────────────────────
-# 오른쪽: 미리보기 + 다운로드
-# ─────────────────────────────────────────────
-with col_preview:
-    st.markdown('<div class="section-head">실시간 미리보기</div>',
-                unsafe_allow_html=True)
+function removePhoto() {
+  photoDataURL = null;
+  document.getElementById('photoPreview').style.display = 'none';
+  document.getElementById('photoPlaceholder').style.display = 'block';
+  document.getElementById('removePhotoBtn').style.display = 'none';
+  document.getElementById('photoInput').value = '';
+  updateCard();
+}
 
-    try:
-        render_fn = RENDERERS[template]
-        card_img = render_fn(card_data)
-        st.image(card_img, use_container_width=True)
+// ─── Duty management ───
+function addDuty(text = '') {
+  const list = document.getElementById('dutyList');
+  if (list.children.length >= 5) return;
+  const div = document.createElement('div');
+  div.className = 'duty-item';
+  div.innerHTML = `
+    <input type="text" value="${text}" placeholder="업무 내용 입력" oninput="updateCard()">
+    <button class="del-btn" onclick="this.parentElement.remove(); updateCard()">✕</button>
+  `;
+  list.appendChild(div);
+  updateCard();
+}
 
-        png_bytes = img_to_bytes(card_img)
-        st.download_button(
-            label="⬇️ PNG 이미지로 저장",
-            data=png_bytes,
-            file_name=f"메리츠_{name}_프로필카드.png",
-            mime="image/png",
-        )
-        st.caption("💡 저장한 이미지를 카카오톡에서 첨부하여 공유하세요")
+function getDuties() {
+  return Array.from(document.querySelectorAll('.duty-item input'))
+    .map(i => i.value.trim())
+    .filter(Boolean);
+}
 
-    except Exception as e:
-        st.error(f"카드 생성 오류: {e}")
-        import traceback
-        st.code(traceback.format_exc())
+// ─── Template ───
+function setTemplate(tpl, btn) {
+  currentTemplate = tpl;
+  document.querySelectorAll('.template-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const card = document.getElementById('profile-card');
+  card.className = tpl === 'default' ? '' : `template-${tpl}`;
+}
+
+// ─── QR Code ───
+function updateQR() {
+  const phone = document.getElementById('f_phone').value || '010-0000-0000';
+  const container = document.getElementById('qrContainer');
+  container.innerHTML = '';
+  try {
+    new QRCode(container, {
+      text: `tel:${phone.replace(/-/g,'')}`,
+      width: 80, height: 80,
+      colorDark: '#1A237E', colorLight: '#ffffff',
+      correctLevel: QRCode.CorrectLevel.M
+    });
+  } catch(e) {}
+}
+
+// ─── Update card ───
+function updateCard() {
+  const name   = document.getElementById('f_name').value   || '이름';
+  const title  = document.getElementById('f_title').value  || '직책';
+  const branch = document.getElementById('f_branch').value || '소속지점';
+  const tagline= document.getElementById('f_tagline').value|| '';
+  const phone  = document.getElementById('f_phone').value  || '';
+  const kakao  = document.getElementById('f_kakao').value  || '';
+  const email  = document.getElementById('f_email').value  || '';
+  const duties = getDuties();
+
+  // Text fields
+  document.getElementById('c_name').textContent    = name;
+  document.getElementById('c_subname').textContent = `메리츠 ${name}`;
+  document.getElementById('c_title').textContent   = title;
+  document.getElementById('c_tagline').textContent = tagline;
+  document.getElementById('c_phone').textContent   = phone;
+  document.getElementById('c_kakao').textContent   = kakao;
+  document.getElementById('c_email').textContent   = email;
+  document.getElementById('c_branch').textContent  = branch;
+  document.getElementById('c_footer').textContent  = branch;
+  document.getElementById('c_contactName').innerHTML = `${name} <small>${title}</small>`;
+
+  // Photo
+  const photoWrap = document.getElementById('c_photoWrap');
+  photoWrap.innerHTML = photoDataURL
+    ? `<img src="${photoDataURL}" alt="프로필">`
+    : `<div class="card-photo-placeholder">👤</div>`;
+
+  const bottomPhoto = document.getElementById('c_bottomPhoto');
+  bottomPhoto.innerHTML = photoDataURL
+    ? `<img class="card-bottom-photo" src="${photoDataURL}" alt="프로필">`
+    : `<div class="card-bottom-photo-placeholder">👤</div>`;
+
+  // Duties
+  const dutyHTML = duties.map(d =>
+    `<div class="card-duty-item"><span class="card-duty-check">✓</span><span>${d}</span></div>`
+  ).join('');
+  document.getElementById('c_duties').innerHTML = dutyHTML;
+  document.getElementById('c_bottomDuties').innerHTML = dutyHTML;
+}
+
+// ─── Download ───
+async function downloadCard() {
+  const overlay = document.getElementById('downloadOverlay');
+  overlay.style.display = 'flex';
+
+  // Wait for fonts/images
+  await new Promise(r => setTimeout(r, 300));
+
+  const card = document.getElementById('profile-card');
+  try {
+    const canvas = await html2canvas(card, {
+      scale: 3,
+      useCORS: true,
+      allowTaint: true,
+      backgroundColor: '#ffffff',
+      logging: false,
+    });
+    const link = document.createElement('a');
+    const name = document.getElementById('f_name').value || '프로필';
+    link.download = `메리츠_${name}_프로필카드.png`;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  } catch(e) {
+    alert('이미지 생성 중 오류가 발생했습니다. 다시 시도해주세요.');
+    console.error(e);
+  }
+  overlay.style.display = 'none';
+}
+
+// ─── Share (Web Share API or fallback) ───
+async function shareCard() {
+  const overlay = document.getElementById('downloadOverlay');
+  overlay.style.display = 'flex';
+  await new Promise(r => setTimeout(r, 300));
+
+  const card = document.getElementById('profile-card');
+  try {
+    const canvas = await html2canvas(card, { scale: 2, useCORS: true, backgroundColor: '#fff' });
+    canvas.toBlob(async (blob) => {
+      overlay.style.display = 'none';
+      if (navigator.share && navigator.canShare) {
+        const file = new File([blob], '프로필카드.png', { type: 'image/png' });
+        try {
+          await navigator.share({ files: [file], title: '메리츠 프로필 카드' });
+        } catch(e) {
+          fallbackSave(canvas);
+        }
+      } else {
+        fallbackSave(canvas);
+      }
+    });
+  } catch(e) {
+    overlay.style.display = 'none';
+    alert('공유 중 오류가 발생했습니다.');
+  }
+}
+
+function fallbackSave(canvas) {
+  const link = document.createElement('a');
+  link.downlo
