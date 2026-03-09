@@ -407,13 +407,7 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
 
 /* Branch */
 .card-branch {
-  background: var(--meritz-navy);
-  color: white;
-  padding: 0.7rem 1.5rem;
-  font-size: 0.82rem;
-  font-weight: 500;
-  text-align: center;
-  letter-spacing: 0.3px;
+  display: none;
 }
 
 /* Bottom section */
@@ -463,7 +457,6 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
 #profile-card.template-navy .card-title { color: rgba(255,255,255,0.8); }
 
 #profile-card.template-minimal .card-bottom { display: none; }
-#profile-card.template-minimal .card-branch { display: none; }
 #profile-card.template-minimal .card-header { padding-bottom: 1.5rem; }
 
 /* Loading overlay */
