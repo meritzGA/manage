@@ -2,3 +2,6 @@ streamlit
 pandas
 openpyxl
 numpy
+streamlit
+pillow
+qrcode[pil]
