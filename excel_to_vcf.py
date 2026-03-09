@@ -8,24 +8,24 @@ st.set_page_config(page_title="엑셀 → 연락처 변환기", page_icon="📇"
 # ── 스타일 ──
 st.markdown("""
 <style>
-    .stApp { background-color: #0f1923; }
-    h1, h2, h3 { color: #e2e8f0 !important; }
+    .stApp { background-color: #f8fafc; }
+    h1, h2, h3 { color: #1e293b !important; }
     .step-badge {
         display: inline-flex; align-items: center; justify-content: center;
         background: #2563eb; color: #fff; width: 26px; height: 26px;
         border-radius: 50%; font-size: 13px; font-weight: 700; margin-right: 8px;
     }
     .count-badge {
-        background: rgba(59,130,246,0.12); color: #60a5fa;
+        background: #dbeafe; color: #2563eb;
         padding: 4px 14px; border-radius: 20px; font-weight: 600; font-size: 14px;
     }
     .success-box {
-        background: rgba(34,197,94,0.08); border: 1px solid rgba(34,197,94,0.25);
-        border-radius: 12px; padding: 16px 20px; color: #4ade80; margin-top: 12px;
+        background: #f0fdf4; border: 1px solid #bbf7d0;
+        border-radius: 12px; padding: 16px 20px; color: #16a34a; margin-top: 12px;
     }
     .guide-box {
-        background: rgba(30,41,59,0.4); border: 1px solid rgba(30,41,59,0.6);
-        border-radius: 12px; padding: 18px 22px; color: #94a3b8; font-size: 14px; line-height: 2;
+        background: #f1f5f9; border: 1px solid #e2e8f0;
+        border-radius: 12px; padding: 18px 22px; color: #475569; font-size: 14px; line-height: 2;
     }
 </style>
 """, unsafe_allow_html=True)
