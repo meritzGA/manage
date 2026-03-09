@@ -2,8 +2,9 @@ import streamlit as st
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 import qrcode
 import io
-import textwrap
 import os
+import glob
+import subprocess
 
 # ─────────────────────────────────────────────
 # 페이지 설정
@@ -15,16 +16,75 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────
-# 폰트 경로
+# 폰트 자동 탐색
 # ─────────────────────────────────────────────
-FONT_DIR = "/usr/share/fonts/opentype/noto"
-FONT_REG   = os.path.join(FONT_DIR, "NotoSansCJK-Regular.ttc")
-FONT_BOLD  = os.path.join(FONT_DIR, "NotoSansCJK-Bold.ttc")
-FONT_BLACK = os.path.join(FONT_DIR, "NotoSansCJK-Black.ttc")
-KR_INDEX = 1  # TTC 내 한국어 인덱스
+def _find_font(candidates):
+    """후보 경로 리스트에서 실제 존재하는 첫 번째 파일 반환"""
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    # glob 탐색 (패키지 설치 경로가 다를 경우)
+    for pattern in [
+        "/usr/share/fonts/**/NotoSansCJK*.ttc",
+        "/usr/share/fonts/**/NotoSans*CJK*.ttc",
+        "/home/**/.fonts/NotoSans*.ttc",
+        "/usr/local/share/fonts/**/*.ttc",
+    ]:
+        results = glob.glob(pattern, recursive=True)
+        if results:
+            return results[0]
+    return None
+
+def _install_fonts():
+    """폰트가 없을 경우 apt로 설치 시도"""
+    try:
+        subprocess.run(
+            ["apt-get", "install", "-y", "-q", "fonts-noto-cjk"],
+            capture_output=True, timeout=120
+        )
+    except Exception:
+        pass
+
+# 후보 경로 (Streamlit Cloud, Ubuntu 다양한 버전 대응)
+_CANDIDATES_REG = [
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto-cjk/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+]
+_CANDIDATES_BOLD = [p.replace("Regular", "Bold") for p in _CANDIDATES_REG]
+_CANDIDATES_BLACK = [p.replace("Regular", "Black") for p in _CANDIDATES_REG]
+
+FONT_REG   = _find_font(_CANDIDATES_REG)
+FONT_BOLD  = _find_font(_CANDIDATES_BOLD)
+FONT_BLACK = _find_font(_CANDIDATES_BLACK)
+
+# 없으면 설치 후 재탐색
+if not FONT_REG:
+    _install_fonts()
+    FONT_REG   = _find_font(_CANDIDATES_REG)
+    FONT_BOLD  = _find_font(_CANDIDATES_BOLD)
+    FONT_BLACK = _find_font(_CANDIDATES_BLACK)
+
+# 그래도 없으면 wqy (중국어 폰트지만 한글 일부 지원) fallback
+if not FONT_REG:
+    FONT_REG = FONT_BOLD = FONT_BLACK = (
+        glob.glob("/usr/share/fonts/**/*.ttc", recursive=True) +
+        glob.glob("/usr/share/fonts/**/*.ttf", recursive=True)
+    )[0] if glob.glob("/usr/share/fonts/**/*.ttc", recursive=True) else None
+
+KR_INDEX = 1  # NotoSansCJK TTC 내 한국어 인덱스
 
 def font(path, size, index=KR_INDEX):
-    return ImageFont.truetype(path, size, index=index)
+    if not path:
+        return ImageFont.load_default()
+    try:
+        return ImageFont.truetype(path, size, index=index)
+    except Exception:
+        try:
+            return ImageFont.truetype(path, size, index=0)
+        except Exception:
+            return ImageFont.load_default()
 
 # ─────────────────────────────────────────────
 # 색상 팔레트
