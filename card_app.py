@@ -1,3 +1,30 @@
+import streamlit as st
+
+st.set_page_config(
+    page_title="메리츠 프로필 카드 생성기",
+    page_icon="🔴",
+    layout="wide",
+)
+
+# Hide Streamlit default UI for cleaner look
+st.markdown("""
+<style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    .stApp > header {visibility: hidden;}
+    .block-container {
+        padding-top: 0 !important;
+        padding-left: 0 !important;
+        padding-right: 0 !important;
+        max-width: 100% !important;
+    }
+    iframe {
+        border: none !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+HTML_CODE = r"""
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -26,7 +53,7 @@ body {
   min-height: 100vh;
 }
 
-/* ─── HEADER ─── */
+/* HEADER */
 .site-header {
   background: var(--meritz-navy);
   color: white;
@@ -45,7 +72,7 @@ body {
 .site-header .logo span { color: #FEE500; }
 .site-header p { font-size: 0.85rem; color: rgba(255,255,255,0.7); }
 
-/* ─── LAYOUT ─── */
+/* LAYOUT */
 .main-layout {
   display: grid;
   grid-template-columns: 420px 1fr;
@@ -55,7 +82,7 @@ body {
   padding: 0 2rem;
 }
 
-/* ─── FORM PANEL ─── */
+/* FORM PANEL */
 .form-panel {
   background: white;
   border-radius: 16px;
@@ -74,9 +101,7 @@ body {
   border-bottom: 2px solid var(--meritz-red);
 }
 
-.form-section {
-  margin-bottom: 1.5rem;
-}
+.form-section { margin-bottom: 1.5rem; }
 .form-section h3 {
   font-size: 0.8rem;
   font-weight: 700;
@@ -140,9 +165,7 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
 
 /* Duties */
 .duty-list { display: flex; flex-direction: column; gap: 0.4rem; }
-.duty-item {
-  display: flex; align-items: center; gap: 0.5rem;
-}
+.duty-item { display: flex; align-items: center; gap: 0.5rem; }
 .duty-item input[type="text"] { flex: 1; }
 .duty-item .del-btn {
   width: 28px; height: 28px;
@@ -222,7 +245,7 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
 }
 .btn-share:hover { background: #F0D800; }
 
-/* ─── PREVIEW PANEL ─── */
+/* PREVIEW PANEL */
 .preview-panel {
   display: flex;
   flex-direction: column;
@@ -237,7 +260,7 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
   letter-spacing: 1px;
 }
 
-/* ─── CARD ─── */
+/* CARD */
 #profile-card {
   width: 420px;
   background: white;
@@ -247,7 +270,6 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
   font-family: 'Noto Sans KR', sans-serif;
 }
 
-/* Card Header */
 .card-header {
   background: white;
   padding: 1.5rem 1.5rem 0;
@@ -260,14 +282,8 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
   letter-spacing: -0.5px;
   margin-bottom: 0.8rem;
 }
-.card-hero {
-  display: flex;
-  gap: 1rem;
-  align-items: flex-start;
-}
-.card-hero-text {
-  flex: 1;
-}
+.card-hero { display: flex; gap: 1rem; align-items: flex-start; }
+.card-hero-text { flex: 1; }
 .card-name {
   font-size: 1.5rem;
   font-weight: 900;
@@ -287,24 +303,15 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
   font-weight: 500;
 }
 .card-photo-wrap {
-  width: 110px;
-  height: 130px;
+  width: 110px; height: 130px;
   border-radius: 12px;
   overflow: hidden;
   flex-shrink: 0;
   background: linear-gradient(135deg, #f0f0f0 0%, #e0e0e0 100%);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: flex; align-items: center; justify-content: center;
 }
-.card-photo-wrap img {
-  width: 100%; height: 100%;
-  object-fit: cover;
-}
-.card-photo-placeholder {
-  font-size: 2.5rem;
-  color: #ccc;
-}
+.card-photo-wrap img { width: 100%; height: 100%; object-fit: cover; }
+.card-photo-placeholder { font-size: 2.5rem; color: #ccc; }
 
 /* Tagline */
 .card-tagline {
@@ -318,8 +325,6 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
   line-height: 1.5;
   border-left: 4px solid var(--meritz-red);
 }
-.card-tagline::before { content: '"'; color: var(--meritz-red); font-size: 1.2rem; }
-.card-tagline::after  { content: '"'; color: var(--meritz-red); font-size: 1.2rem; }
 
 /* Duties */
 .card-duties {
@@ -365,8 +370,7 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
   align-items: flex-start;
 }
 .card-qr {
-  width: 80px;
-  height: 80px;
+  width: 80px; height: 80px;
   flex-shrink: 0;
   border: 2px solid var(--gray-200);
   border-radius: 8px;
@@ -418,7 +422,7 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
   letter-spacing: 0.3px;
 }
 
-/* Mini photo bottom */
+/* Bottom section */
 .card-bottom {
   background: linear-gradient(135deg, #FFF5F7 0%, #FFE8EC 100%);
   padding: 1rem 1.5rem;
@@ -439,9 +443,7 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
   border-radius: 50%;
   background: white;
   flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: flex; align-items: center; justify-content: center;
   font-size: 1.5rem;
   border: 3px solid white;
   box-shadow: 0 2px 8px rgba(0,0,0,0.15);
@@ -450,7 +452,7 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
 .card-bottom-duties .card-duties-title { font-size: 0.8rem; margin-bottom: 0.5rem; }
 .card-bottom-duties .card-duty-item { font-size: 0.78rem; margin-bottom: 0.3rem; }
 
-/* Bottom footer */
+/* Footer */
 .card-footer {
   background: var(--meritz-red);
   color: white;
@@ -464,7 +466,8 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
 #profile-card.template-navy .card-logo { color: white; }
 #profile-card.template-navy .card-header { background: var(--meritz-navy); }
 #profile-card.template-navy .card-name { color: #FFE08A; }
-#profile-card.template-navy .card-sub-name, #profile-card.template-navy .card-title { color: rgba(255,255,255,0.8); }
+#profile-card.template-navy .card-sub-name,
+#profile-card.template-navy .card-title { color: rgba(255,255,255,0.8); }
 
 #profile-card.template-minimal .card-bottom { display: none; }
 #profile-card.template-minimal .card-header { padding-bottom: 1.5rem; }
@@ -473,7 +476,7 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
 .downloading {
   position: fixed; inset: 0;
   background: rgba(26,35,126,0.85);
-  display: flex; flex-direction: column;
+  flex-direction: column;
   align-items: center; justify-content: center;
   z-index: 1000; color: white;
   font-size: 1.2rem; font-weight: 700;
@@ -511,11 +514,10 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
 
 <div class="main-layout">
 
-  <!-- ─── FORM PANEL ─── -->
+  <!-- FORM PANEL -->
   <div class="form-panel">
     <h2>📝 정보 입력</h2>
 
-    <!-- 템플릿 선택 -->
     <div class="form-section">
       <h3>디자인 선택</h3>
       <div class="template-grid">
@@ -525,7 +527,6 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
       </div>
     </div>
 
-    <!-- 사진 -->
     <div class="form-section">
       <h3>프로필 사진 (선택)</h3>
       <div class="photo-upload-area" id="uploadArea">
@@ -533,13 +534,12 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
         <img class="photo-preview" id="photoPreview" src="" alt="미리보기">
         <div id="photoPlaceholder">
           <div class="photo-icon">📷</div>
-          <p>사진을 클릭하여 업로드<br><small>JPG, PNG · 업로드 안 해도 됩니다</small></p>
+          <p>사진을 클릭하여 업로드<br><small>JPG, PNG</small></p>
         </div>
       </div>
       <button onclick="removePhoto()" id="removePhotoBtn" style="display:none;margin-top:0.4rem;width:100%;padding:0.4rem;background:#FFF;border:1px solid #ccc;border-radius:6px;cursor:pointer;font-size:0.8rem;color:#999">사진 제거</button>
     </div>
 
-    <!-- 기본 정보 -->
     <div class="form-section">
       <h3>기본 정보</h3>
       <div class="field-group">
@@ -556,7 +556,6 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
       </div>
     </div>
 
-    <!-- 한마디 -->
     <div class="form-section">
       <h3>슬로건 / 한마디</h3>
       <div class="field-group">
@@ -564,7 +563,6 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
       </div>
     </div>
 
-    <!-- 연락처 -->
     <div class="form-section">
       <h3>연락처</h3>
       <div class="field-group">
@@ -581,31 +579,23 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
       </div>
     </div>
 
-    <!-- 업무 소개 -->
     <div class="form-section">
       <h3>제 업무는요 <small style="font-weight:400;text-transform:none;font-size:0.75rem;color:#aaa">(최대 5개)</small></h3>
       <div class="duty-list" id="dutyList"></div>
       <button class="add-duty-btn" onclick="addDuty()">+ 항목 추가</button>
     </div>
 
-    <!-- 다운로드 -->
     <div class="action-btns">
-      <button class="btn-download" onclick="downloadCard()">
-        ⬇️ 이미지로 저장 (PNG)
-      </button>
-      <button class="btn-share" onclick="shareCard()">
-        💬 카카오톡으로 공유
-      </button>
+      <button class="btn-download" onclick="downloadCard()">⬇️ 이미지로 저장 (PNG)</button>
+      <button class="btn-share" onclick="shareCard()">💬 카카오톡으로 공유</button>
     </div>
   </div>
 
-  <!-- ─── PREVIEW PANEL ─── -->
+  <!-- PREVIEW PANEL -->
   <div class="preview-panel">
     <p class="preview-label">실시간 미리보기</p>
 
-    <!-- THE CARD -->
     <div id="profile-card">
-
       <div class="card-header">
         <div class="card-logo">MERITZ</div>
         <div class="card-hero">
@@ -620,9 +610,7 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
         </div>
       </div>
 
-      <div class="card-tagline" id="c_tagline">
-        팀장님 영업에 도움이 되는 설계매니저 되겠습니다.
-      </div>
+      <div class="card-tagline" id="c_tagline">팀장님 영업에 도움이 되는 설계매니저 되겠습니다.</div>
 
       <div class="card-duties">
         <div class="card-duties-title">제 업무는요:</div>
@@ -634,9 +622,7 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
       <div class="card-contact">
         <div class="card-qr" id="qrContainer"></div>
         <div class="card-contact-info">
-          <div class="card-contact-name" id="c_contactName">
-            김은영 <small>GA설계매니저 (SM)</small>
-          </div>
+          <div class="card-contact-name" id="c_contactName">김은영 <small>GA설계매니저 (SM)</small></div>
           <div class="contact-row">
             <div class="contact-icon icon-phone">📞</div>
             <span id="c_phone">010-1234-5678</span>
@@ -647,7 +633,7 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
           </div>
           <div class="contact-row">
             <div class="contact-icon icon-email">✉️</div>
-            <span id="c_email"><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="2f44564446426f424a5d465b55014c4042">[email&#160;protected]</a></span>
+            <span id="c_email">kykim@meritz.com</span>
           </div>
         </div>
       </div>
@@ -665,9 +651,7 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
       </div>
 
       <div class="card-footer" id="c_footer">메리츠화재 호남GA본부 12지점</div>
-
     </div>
-    <!-- END CARD -->
 
     <p style="font-size:0.78rem;color:#aaa;text-align:center;max-width:420px">
       💡 정보를 입력하면 카드가 실시간으로 업데이트됩니다<br>
@@ -677,26 +661,24 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
 
 </div>
 
-<script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script>
-// ─── Default duties ───
+<script>
+// Default duties
 const defaultDuties = [
-  "보험 상품 포인토 정리 및 비교자료 제공",
+  "보험 상품 포인트 정리 및 비교자료 제공",
   "영업에 바로 활용할 수 있는 멘토 지원",
-  "보험로 번등 및 신상품 빠르게 전달"
+  "보험료 변동 및 신상품 빠르게 전달"
 ];
 
 let photoDataURL = null;
 let qrInstance = null;
 let currentTemplate = 'default';
 
-// ─── Init ───
 window.addEventListener('DOMContentLoaded', () => {
   defaultDuties.forEach(d => addDuty(d));
   updateCard();
   updateQR();
 });
 
-// ─── Photo handling ───
 function handlePhoto(input) {
   const file = input.files[0];
   if (!file) return;
@@ -721,16 +703,14 @@ function removePhoto() {
   updateCard();
 }
 
-// ─── Duty management ───
-function addDuty(text = '') {
+function addDuty(text) {
+  text = text || '';
   const list = document.getElementById('dutyList');
   if (list.children.length >= 5) return;
   const div = document.createElement('div');
   div.className = 'duty-item';
-  div.innerHTML = `
-    <input type="text" value="${text}" placeholder="업무 내용 입력" oninput="updateCard()">
-    <button class="del-btn" onclick="this.parentElement.remove(); updateCard()">✕</button>
-  `;
+  div.innerHTML = '<input type="text" value="' + text + '" placeholder="업무 내용 입력" oninput="updateCard()">' +
+    '<button class="del-btn" onclick="this.parentElement.remove(); updateCard()">✕</button>';
   list.appendChild(div);
   updateCard();
 }
@@ -741,23 +721,21 @@ function getDuties() {
     .filter(Boolean);
 }
 
-// ─── Template ───
 function setTemplate(tpl, btn) {
   currentTemplate = tpl;
   document.querySelectorAll('.template-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   const card = document.getElementById('profile-card');
-  card.className = tpl === 'default' ? '' : `template-${tpl}`;
+  card.className = tpl === 'default' ? '' : 'template-' + tpl;
 }
 
-// ─── QR Code ───
 function updateQR() {
   const phone = document.getElementById('f_phone').value || '010-0000-0000';
   const container = document.getElementById('qrContainer');
   container.innerHTML = '';
   try {
     new QRCode(container, {
-      text: `tel:${phone.replace(/-/g,'')}`,
+      text: 'tel:' + phone.replace(/-/g,''),
       width: 80, height: 80,
       colorDark: '#1A237E', colorLight: '#ffffff',
       correctLevel: QRCode.CorrectLevel.M
@@ -765,7 +743,6 @@ function updateQR() {
   } catch(e) {}
 }
 
-// ─── Update card ───
 function updateCard() {
   const name   = document.getElementById('f_name').value   || '이름';
   const title  = document.getElementById('f_title').value  || '직책';
@@ -776,9 +753,8 @@ function updateCard() {
   const email  = document.getElementById('f_email').value  || '';
   const duties = getDuties();
 
-  // Text fields
   document.getElementById('c_name').textContent    = name;
-  document.getElementById('c_subname').textContent = `메리츠 ${name}`;
+  document.getElementById('c_subname').textContent = '메리츠 ' + name;
   document.getElementById('c_title').textContent   = title;
   document.getElementById('c_tagline').textContent = tagline;
   document.getElementById('c_phone').textContent   = phone;
@@ -786,33 +762,28 @@ function updateCard() {
   document.getElementById('c_email').textContent   = email;
   document.getElementById('c_branch').textContent  = branch;
   document.getElementById('c_footer').textContent  = branch;
-  document.getElementById('c_contactName').innerHTML = `${name} <small>${title}</small>`;
+  document.getElementById('c_contactName').innerHTML = name + ' <small>' + title + '</small>';
 
-  // Photo
   const photoWrap = document.getElementById('c_photoWrap');
   photoWrap.innerHTML = photoDataURL
-    ? `<img src="${photoDataURL}" alt="프로필">`
-    : `<div class="card-photo-placeholder">👤</div>`;
+    ? '<img src="' + photoDataURL + '" alt="프로필">'
+    : '<div class="card-photo-placeholder">👤</div>';
 
   const bottomPhoto = document.getElementById('c_bottomPhoto');
   bottomPhoto.innerHTML = photoDataURL
-    ? `<img class="card-bottom-photo" src="${photoDataURL}" alt="프로필">`
-    : `<div class="card-bottom-photo-placeholder">👤</div>`;
+    ? '<img class="card-bottom-photo" src="' + photoDataURL + '" alt="프로필">'
+    : '<div class="card-bottom-photo-placeholder">👤</div>';
 
-  // Duties
-  const dutyHTML = duties.map(d =>
-    `<div class="card-duty-item"><span class="card-duty-check">✓</span><span>${d}</span></div>`
-  ).join('');
+  var dutyHTML = duties.map(function(d) {
+    return '<div class="card-duty-item"><span class="card-duty-check">✓</span><span>' + d + '</span></div>';
+  }).join('');
   document.getElementById('c_duties').innerHTML = dutyHTML;
   document.getElementById('c_bottomDuties').innerHTML = dutyHTML;
 }
 
-// ─── Download ───
 async function downloadCard() {
   const overlay = document.getElementById('downloadOverlay');
   overlay.style.display = 'flex';
-
-  // Wait for fonts/images
   await new Promise(r => setTimeout(r, 300));
 
   const card = document.getElementById('profile-card');
@@ -826,7 +797,7 @@ async function downloadCard() {
     });
     const link = document.createElement('a');
     const name = document.getElementById('f_name').value || '프로필';
-    link.download = `메리츠_${name}_프로필카드.png`;
+    link.download = '메리츠_' + name + '_프로필카드.png';
     link.href = canvas.toDataURL('image/png');
     link.click();
   } catch(e) {
@@ -836,7 +807,6 @@ async function downloadCard() {
   overlay.style.display = 'none';
 }
 
-// ─── Share (Web Share API or fallback) ───
 async function shareCard() {
   const overlay = document.getElementById('downloadOverlay');
   overlay.style.display = 'flex';
@@ -866,4 +836,13 @@ async function shareCard() {
 
 function fallbackSave(canvas) {
   const link = document.createElement('a');
-  link.downlo
+  link.download = '프로필카드.png';
+  link.href = canvas.toDataURL('image/png');
+  link.click();
+}
+</script>
+</body>
+</html>
+"""
+
+st.components.v1.html(HTML_CODE, height=1800, scrolling=True)
