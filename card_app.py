@@ -366,7 +366,8 @@ def render_elegant(data):
 
     # 슬로건 인라인
     fnt_qi = font(FONT_REG, 26)
-    d.text((52, 248), f""{data['tagline']}"", font=fnt_qi,
+    tagline_quoted = '\u201c' + data['tagline'] + '\u201d'
+    d.text((52, 248), tagline_quoted, font=fnt_qi,
            fill=(200, 210, 255))
 
     # ── 바디 ──
