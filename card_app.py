@@ -430,14 +430,13 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
 #profile-card.template-white .card-title { color: var(--gray-500); }
 #profile-card.template-white .card-footer { background: var(--meritz-navy); }
 
-/* Template: Gray */
-#profile-card.template-gray .card-logo { color: white; }
-#profile-card.template-gray .card-header { background: #424242; }
-#profile-card.template-gray .card-name { color: white; }
-#profile-card.template-gray .card-title { color: rgba(255,255,255,0.8); }
-#profile-card.template-gray .card-footer { background: #424242; }
-#profile-card.template-gray .card-divider { background: linear-gradient(90deg, #424242 0%, #757575 50%, #BDBDBD 100%); }
-#profile-card.template-gray .card-tagline { background: linear-gradient(135deg, #F5F5F5 0%, #EEEEEE 100%); border-left-color: #424242; }
+/* Template: Navy */
+#profile-card.template-navy .card-logo { color: white; }
+#profile-card.template-navy .card-header { background: var(--meritz-navy); }
+#profile-card.template-navy .card-name { color: white; }
+#profile-card.template-navy .card-title { color: rgba(255,255,255,0.8); }
+#profile-card.template-navy .card-footer { background: var(--meritz-navy); }
+#profile-card.template-navy .card-divider { background: linear-gradient(90deg, var(--meritz-navy) 0%, #3949AB 50%, #7986CB 100%); }
 
 /* Loading overlay */
 .downloading {
@@ -488,9 +487,9 @@ textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
     <div class="form-section">
       <h3>디자인 선택</h3>
       <div class="template-grid">
-        <button class="template-btn active" onclick="setTemplate('default', this)">🔴 메리츠 레드</button>
+        <button class="template-btn active" onclick="setTemplate('default', this)">🔴 레드</button>
+        <button class="template-btn" onclick="setTemplate('navy', this)">🔵 네이비</button>
         <button class="template-btn" onclick="setTemplate('white', this)">⬜ 화이트</button>
-        <button class="template-btn" onclick="setTemplate('gray', this)">⬛ 그레이</button>
       </div>
     </div>
 
