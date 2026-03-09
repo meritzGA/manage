@@ -1,2254 +1,1377 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
-import re
-import io
 import os
-import pickle
-import uuid
-import shutil
 import json
+import re
 from datetime import datetime
+import streamlit.components.v1 as components
 
-st.set_page_config(page_title="지원매니저별 실적 관리 시스템", layout="wide")
+st.set_page_config(page_title="메리츠화재 시상 현황", layout="wide")
 
-# 📱 모바일 뷰포트 메타 태그 삽입
-st.markdown("""
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-""", unsafe_allow_html=True)
+DATA_DIR = "app_data"
+if not os.path.exists(DATA_DIR): os.makedirs(DATA_DIR)
 
-DATA_FILE = "app_data.pkl"
-CONFIG_FILE = "app_config.pkl"
+LOG_FILE = os.path.join(DATA_DIR, "access_log.csv")
 
 # ==========================================
-# 0. 메리츠 스타일 커스텀 CSS (디자인 전면 개편)
+# 🔧 numpy 타입 JSON 직렬화 지원
 # ==========================================
-st.markdown("""
-<style>
-@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
-html, body, [class*="css"] {
-    font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, 'Helvetica Neue', 'Segoe UI', 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif;
-}
-/* 1. 상단 매니저 박스: 메리츠 다크레드 바탕 */
-.toss-header {
-    background-color: rgb(128, 0, 0);
-    padding: 32px 40px;
-    border-radius: 20px;
-    margin-bottom: 24px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.1);
-}
-.toss-title {
-    color: #ffffff !important; 
-    font-size: 36px;
-    font-weight: 800;
-    margin: 0;
-    letter-spacing: -0.5px;
-}
-.toss-subtitle {
-    color: #ffcccc !important; 
-    font-size: 24px;
-    font-weight: 700;
-    margin-left: 10px;
-}
-.toss-desc {
-    color: #f2f4f6 !important;
-    font-size: 17px;
-    margin: 12px 0 0 0;
-    font-weight: 500;
-}
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, (np.integer,)): return int(obj)
+        if isinstance(obj, (np.floating,)): return float(obj)
+        if isinstance(obj, np.ndarray): return obj.tolist()
+        if isinstance(obj, (np.bool_,)): return bool(obj)
+        return super().default(obj)
 
-/* 실적 테이블 스타일 */
-.perf-table-wrap {
-    width: 100%;
-    overflow-x: auto;
-    border-radius: 12px;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.08);
-    margin-top: 8px;
-    -webkit-overflow-scrolling: touch;
-}
-.perf-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 14px;
-    white-space: nowrap;
-}
-.perf-table thead th {
-    background-color: #4e5968;
-    color: #ffffff;
-    font-weight: 700;
-    text-align: center;
-    padding: 10px 14px;
-    border: 1px solid #3d4654;
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    cursor: pointer;
-    user-select: none;
-}
-.perf-table thead th .sort-arrow {
-    margin-left: 4px;
-    font-size: 11px;
-    opacity: 0.5;
-}
-.perf-table thead th .sort-arrow.active {
-    opacity: 1;
-}
-.perf-table tbody td {
-    text-align: center;
-    padding: 8px 12px;
-    border: 1px solid #e5e8eb;
-}
-.perf-table tbody tr:nth-child(even) {
-    background-color: #f7f8fa;
-}
-.perf-table tbody tr:hover {
-    background-color: #eef1f6;
-}
-.shortfall-cell {
-    color: rgb(128, 0, 0);
-    font-weight: 700;
-}
-/* 메인 영역 패딩 최소화 */
-.block-container {
-    padding-left: 1.5rem !important;
-    padding-right: 1.5rem !important;
-    max-width: 100% !important;
-}
-iframe {
-    width: 100% !important;
-}
+import re as _re
+def _clean_excel_text(s):
+    if not s or not isinstance(s, str): return s
+    return _re.sub(r'_x([0-9A-Fa-f]{4})_', lambda m: chr(int(m.group(1), 16)), s)
 
-/* ========================================
-   📱 모바일 반응형 (768px 이하)
-   ======================================== */
-@media (max-width: 768px) {
-    .block-container {
-        padding-left: 0.5rem !important;
-        padding-right: 0.5rem !important;
-    }
-    /* 헤더 축소 */
-    .toss-header {
-        padding: 18px 16px;
-        border-radius: 14px;
-        margin-bottom: 14px;
-    }
-    .toss-title {
-        font-size: 22px !important;
-    }
-    .toss-subtitle {
-        font-size: 14px !important;
-        display: block;
-        margin-left: 0;
-        margin-top: 4px;
-    }
-    .toss-desc {
-        font-size: 13px !important;
-        margin-top: 6px;
-    }
-    /* 기준일 날짜 */
-    .toss-header .data-date {
-        font-size: 11px !important;
-        float: none !important;
-        display: block;
-        text-align: right;
-        margin-bottom: 4px;
-    }
-    /* 사이드바 닫혔을 때 메인 패딩 */
-    [data-testid="stSidebar"][aria-expanded="false"] ~ .block-container {
-        padding-left: 0.5rem !important;
-    }
-    /* iframe 높이 모바일 최적화 */
-    iframe {
-        min-height: 60vh !important;
-    }
-    /* selectbox, text_input 등 위젯 크기 */
-    [data-testid="stTextInput"] input,
-    [data-testid="stSelectbox"] > div > div {
-        font-size: 14px !important;
-    }
-    /* 폼 버튼 크기 */
-    .stButton > button, [data-testid="stFormSubmitButton"] > button {
-        width: 100% !important;
-        padding: 10px !important;
-        font-size: 15px !important;
-    }
-}
+def save_log(user_name, user_code, action_type):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_data = pd.DataFrame([[now, user_name, user_code, action_type]], columns=["시간","이름/구분","코드","작업"])
+    if not os.path.exists(LOG_FILE): log_data.to_csv(LOG_FILE, index=False, encoding="utf-8-sig")
+    else: log_data.to_csv(LOG_FILE, mode='a', header=False, index=False, encoding="utf-8-sig")
 
-/* ========================================
-   📱 소형 모바일 (480px 이하)
-   ======================================== */
-@media (max-width: 480px) {
-    .block-container {
-        padding-left: 0.25rem !important;
-        padding-right: 0.25rem !important;
-    }
-    .toss-header {
-        padding: 14px 12px;
-        border-radius: 10px;
-    }
-    .toss-title {
-        font-size: 19px !important;
-    }
-    .toss-subtitle {
-        font-size: 12px !important;
-    }
-    .toss-desc {
-        font-size: 12px !important;
-    }
-}
-</style>
-""", unsafe_allow_html=True)
+def copy_btn_component(text):
+    escaped_text = json.dumps(text, ensure_ascii=False)
+    js_code = f"""
+    <div id="copy-container"><button id="copy-btn">💬 카카오톡 메시지 원클릭 복사</button></div>
+    <script>
+    document.getElementById("copy-btn").onclick = function() {{
+        const text = {escaped_text};
+        navigator.clipboard.writeText(text).then(function() {{
+            alert("메시지가 복사되었습니다! 원하시는 채팅창에 붙여넣기(Ctrl+V) 하세요.");
+        }}, function(err) {{ console.error('복사 실패:', err); }});
+    }}
+    </script>
+    <style>
+        #copy-btn {{ width:100%; height:55px; background-color:#FEE500; color:#3C1E1E;
+            border:none; border-radius:12px; font-weight:800; font-size:1.1rem;
+            cursor:pointer; margin-top:5px; margin-bottom:20px; box-shadow:0 4px 10px rgba(0,0,0,0.1); }}
+        #copy-btn:active {{ transform:scale(0.98); }}
+    </style>"""
+    components.html(js_code, height=85)
 
-
-# ==========================================
-# 1. 설정 및 데이터 영구 저장/불러오기 함수
-# ==========================================
-def load_data_and_config():
-    # 구 형식(통합 pkl) 자동 마이그레이션
-    if not os.path.exists(DATA_FILE) and os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, 'rb') as f:
-                old = pickle.load(f)
-            if isinstance(old, dict) and 'df_merged' in old:
-                df = old['df_merged']
-                if isinstance(df, pd.DataFrame) and not df.empty:
-                    with open(DATA_FILE, 'wb') as f:
-                        pickle.dump({'df_merged': df}, f)
-        except Exception:
-            pass
-    
-    # 1) 설정 로드
-    cfg = None
-    for fp in [CONFIG_FILE, CONFIG_FILE + ".bak"]:
-        if not os.path.exists(fp): continue
-        try:
-            with open(fp, 'rb') as f:
-                d = pickle.load(f)
-            if isinstance(d, dict):
-                cfg = d
-                break
-        except Exception:
-            continue
-    if cfg is None:
-        cfg = {}
-    
-    st.session_state['manager_col'] = str(cfg.get('manager_col', ""))
-    st.session_state['manager_name_col'] = str(cfg.get('manager_name_col', ""))
-    st.session_state['manager_col2'] = str(cfg.get('manager_col2', ""))
-    st.session_state['admin_cols'] = cfg.get('admin_cols', []) if isinstance(cfg.get('admin_cols'), list) else []
-    st.session_state['admin_goals'] = cfg.get('admin_goals', [])
-    if isinstance(st.session_state['admin_goals'], dict):
-        st.session_state['admin_goals'] = [
-            {"target_col": k, "ref_col": "", "tiers": v} 
-            for k, v in st.session_state['admin_goals'].items()
-        ]
-    st.session_state['admin_categories'] = cfg.get('admin_categories', []) if isinstance(cfg.get('admin_categories'), list) else []
-    st.session_state['col_order'] = cfg.get('col_order', []) if isinstance(cfg.get('col_order'), list) else []
-    st.session_state['merge_key1_col'] = str(cfg.get('merge_key1_col', ''))
-    st.session_state['merge_key2_col'] = str(cfg.get('merge_key2_col', ''))
-    st.session_state['merge_key3_col'] = str(cfg.get('merge_key3_col', ''))
-    st.session_state['col_groups'] = cfg.get('col_groups', []) if isinstance(cfg.get('col_groups'), list) else []
-    st.session_state['data_date'] = str(cfg.get('data_date', ''))
-    st.session_state['clip_footer'] = str(cfg.get('clip_footer', ''))
-    st.session_state['prize_config'] = cfg.get('prize_config', []) if isinstance(cfg.get('prize_config'), list) else []
-    for item in st.session_state['admin_cols']:
-        if 'fallback_col' not in item: item['fallback_col'] = ''
-    
-    # 2) DataFrame 로드 (DATA_FILE에서만)
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, 'rb') as f:
-                data = pickle.load(f)
-            df = data.get('df_merged', pd.DataFrame()) if isinstance(data, dict) else pd.DataFrame()
-            st.session_state['df_merged'] = df if isinstance(df, pd.DataFrame) else pd.DataFrame()
-        except Exception:
-            st.session_state['df_merged'] = pd.DataFrame()
-
-def _reset_session_state():
-    st.session_state['df_merged'] = pd.DataFrame()
-    st.session_state['manager_col'] = ""
-    st.session_state['manager_name_col'] = ""
-    st.session_state['manager_col2'] = ""
-    st.session_state['admin_cols'] = []
-    st.session_state['admin_goals'] = []
-    st.session_state['admin_categories'] = []
-    st.session_state['col_order'] = []
-    st.session_state['merge_key1_col'] = ''
-    st.session_state['merge_key2_col'] = ''
-    st.session_state['merge_key3_col'] = ''
-    st.session_state['col_groups'] = []
-    st.session_state['data_date'] = ''
-    st.session_state['clip_footer'] = ''
-    st.session_state['prize_config'] = []
-
-def has_data():
-    df = st.session_state.get('df_merged', None)
-    return isinstance(df, pd.DataFrame) and not df.empty
-
-def save_config():
-    """설정만 저장 (가벼움 — 버튼 클릭 시마다 호출해도 부담 없음)"""
-    cfg = {
-        'manager_col': st.session_state.get('manager_col', ""),
-        'manager_name_col': st.session_state.get('manager_name_col', ""),
-        'manager_col2': st.session_state.get('manager_col2', ""),
-        'admin_cols': st.session_state.get('admin_cols', []),
-        'admin_goals': st.session_state.get('admin_goals', []),
-        'admin_categories': st.session_state.get('admin_categories', []),
-        'col_order': st.session_state.get('col_order', []),
-        'merge_key1_col': st.session_state.get('merge_key1_col', ''),
-        'merge_key2_col': st.session_state.get('merge_key2_col', ''),
-        'merge_key3_col': st.session_state.get('merge_key3_col', ''),
-        'col_groups': st.session_state.get('col_groups', []),
-        'data_date': st.session_state.get('data_date', ''),
-        'clip_footer': st.session_state.get('clip_footer', ''),
-        'prize_config': st.session_state.get('prize_config', []),
-    }
+def safe_str(val):
+    if pd.isna(val) or val is None: return ""
     try:
-        if os.path.exists(CONFIG_FILE):
-            shutil.copy2(CONFIG_FILE, CONFIG_FILE + ".bak")
-        tmp = CONFIG_FILE + ".tmp"
-        with open(tmp, 'wb') as f:
-            pickle.dump(cfg, f)
-        shutil.move(tmp, CONFIG_FILE)
-    except Exception:
-        pass
+        if isinstance(val, (int, float)) and float(val).is_integer(): val = int(float(val))
+    except: pass
+    s = str(val)
+    s = re.sub(r'_[xX]([0-9A-Fa-f]{4})_', lambda m: chr(int(m.group(1), 16)), s)
+    s = re.sub(r'\s+', '', s)
+    if s.endswith('.0'): s = s[:-2]
+    return s.upper()
 
-def save_data():
-    """DataFrame만 저장 (무거움 — 파일 병합 시에만 호출)"""
-    try:
-        data = {'df_merged': st.session_state.get('df_merged', pd.DataFrame())}
-        tmp = DATA_FILE + ".tmp"
-        with open(tmp, 'wb') as f:
-            pickle.dump(data, f)
-        shutil.move(tmp, DATA_FILE)
-    except Exception:
-        pass
+def get_clean_series(df, col_name):
+    clean_col_name = f"_clean_{col_name}"
+    if clean_col_name not in df.columns:
+        df[clean_col_name] = df[col_name].apply(safe_str)
+    return df[clean_col_name]
 
-def save_data_and_config():
-    """하위 호환용 — 기존 코드에서 호출하는 곳은 config만 저장"""
-    save_config()
-
-# ==========================================
-# 💰 시상금 계산 모듈 (자체 통합 — df_merged 사용)
-# ==========================================
-
-def _safe_float_prize(val):
+def safe_float(val):
     if pd.isna(val) or val is None: return 0.0
     s = str(val).replace(',', '').strip()
     try: return float(s)
     except: return 0.0
 
-# ★ 수정: outer merge 시 NaN 행을 건너뛰고 첫 번째 유효 값을 반환하는 헬퍼
-def _first_valid(df, col):
-    """지정 열에서 NaN이 아닌 첫 번째 값을 반환. 없으면 0."""
-    if not col or col not in df.columns:
-        return 0
-    s = df[col].dropna()
-    return s.values[0] if not s.empty else 0
+def _get_idx(val, opts):
+    return opts.index(val) if val in opts else 0
 
-def _read_prize_items_app(cfg, match_df):
-    """설정에서 시상금 항목들을 읽어 [{label, amount}] 리스트 반환.
-    지급률(col_eligible)=0이면 미대상으로 제외, 그 외 값이면 대상으로 포함. 공란이면 무조건 포함.
-    ★ 수정: outer merge로 NaN 행이 섞일 수 있으므로 dropna()로 유효 값 우선 사용."""
+def _get_cols_for_file(file_name):
+    df = st.session_state['raw_data'].get(file_name)
+    if df is not None:
+        return [c for c in df.columns.tolist() if not c.startswith('_clean_')]
+    return []
+
+# ==========================================
+# 🔗 사전 병합(Pre-Merge)
+# ==========================================
+def build_merged_data(config_list, raw_data):
+    merged = {}
+    for idx, cfg in enumerate(config_list):
+        base_file = cfg.get('file', '')
+        df_base = raw_data.get(base_file)
+        if df_base is None: continue
+        result = df_base.copy()
+        col_code = cfg.get('col_code', '')
+        if not col_code or col_code not in result.columns:
+            merged[idx] = result; continue
+        ext_files = {}
+        for pi in cfg.get('prize_items', []):
+            pi_file = pi.get('file', '') or ''
+            if not pi_file or pi_file == base_file: continue
+            if pi_file not in ext_files:
+                ext_files[pi_file] = {'col_code_ext': pi.get('col_code_ext', ''), 'cols': set()}
+            col_p = pi.get('col_prize', '')
+            col_e = pi.get('col_eligible', '')
+            if col_p: ext_files[pi_file]['cols'].add(col_p)
+            if col_e: ext_files[pi_file]['cols'].add(col_e)
+        if ext_files:
+            result['_merge_key'] = result[col_code].apply(safe_str)
+            for ext_fname, ext_info in ext_files.items():
+                df_ext = raw_data.get(ext_fname)
+                if df_ext is None: continue
+                col_code_ext = ext_info['col_code_ext']
+                if not col_code_ext or col_code_ext not in df_ext.columns: continue
+                available = [c for c in ext_info['cols'] if c in df_ext.columns]
+                if not available: continue
+                df_e = df_ext.copy()
+                df_e['_merge_key'] = df_e[col_code_ext].apply(safe_str)
+                for c in available:
+                    if c in result.columns: result.drop(columns=[c], inplace=True, errors='ignore')
+                keep = ['_merge_key'] + available
+                result = pd.merge(result, df_e[keep].drop_duplicates(subset=['_merge_key']),
+                                  on='_merge_key', how='left')
+            result.drop(columns=['_merge_key'], inplace=True, errors='ignore')
+        merged[idx] = result
+    return merged
+
+def save_merged_to_disk(merged_data):
+    for idx, df in merged_data.items():
+        df.to_pickle(os.path.join(DATA_DIR, f"_merged_{idx}.pkl"))
+    for f in os.listdir(DATA_DIR):
+        if f.startswith('_merged_') and f.endswith('.pkl'):
+            try:
+                fidx = int(f.replace('_merged_','').replace('.pkl',''))
+                if fidx not in merged_data: os.remove(os.path.join(DATA_DIR, f))
+            except: pass
+
+def load_merged_from_disk(config_list):
+    merged = {}
+    for idx in range(len(config_list)):
+        path = os.path.join(DATA_DIR, f"_merged_{idx}.pkl")
+        if os.path.exists(path):
+            df = pd.read_pickle(path)
+            df.columns = [_clean_excel_text(str(c)) for c in df.columns]
+            for col in df.select_dtypes(include='object').columns:
+                df[col] = df[col].apply(lambda v: _clean_excel_text(str(v)) if pd.notna(v) else v)
+            merged[idx] = df
+    return merged
+
+def _get_merged_df(cfg_index):
+    merged = st.session_state.get('merged_data', {})
+    if cfg_index in merged: return merged[cfg_index]
+    cfg = st.session_state['config'][cfg_index]
+    return st.session_state['raw_data'].get(cfg.get('file', ''))
+
+# ==========================================
+# 📦 데이터 로딩
+# ==========================================
+if 'raw_data' not in st.session_state:
+    st.session_state['raw_data'] = {}
+    for file in os.listdir(DATA_DIR):
+        if file.endswith('.pkl') and not file.startswith('_merged_'):
+            df = pd.read_pickle(os.path.join(DATA_DIR, file))
+            df.columns = [_clean_excel_text(str(c)) for c in df.columns]
+            for col in df.select_dtypes(include='object').columns:
+                df[col] = df[col].apply(lambda v: _clean_excel_text(str(v)) if pd.notna(v) else v)
+            st.session_state['raw_data'][file.replace('.pkl', '')] = df
+
+if 'config' not in st.session_state:
+    config_path = os.path.join(DATA_DIR, 'config.json')
+    if os.path.exists(config_path):
+        with open(config_path, 'r', encoding='utf-8') as f:
+            st.session_state['config'] = json.load(f)
+    else: st.session_state['config'] = []
+
+for c in st.session_state['config']:
+    if 'category' not in c: c['category'] = 'weekly'
+
+if 'merged_data' not in st.session_state:
+    merged = load_merged_from_disk(st.session_state['config'])
+    if merged: st.session_state['merged_data'] = merged
+    elif st.session_state['raw_data'] and st.session_state['config']:
+        st.session_state['merged_data'] = build_merged_data(st.session_state['config'], st.session_state['raw_data'])
+    else: st.session_state['merged_data'] = {}
+
+# --- CSS ---
+st.markdown("""
+<style>
+    [data-testid="stAppViewContainer"] { background-color: #f2f4f6; color: #191f28; }
+    span.material-symbols-rounded, span[data-testid="stIconMaterial"] { display: none !important; }
+    div[data-testid="stRadio"] > div { display:flex; justify-content:center; background-color:#ffffff; padding:10px; border-radius:15px; margin-bottom:20px; margin-top:10px; box-shadow:0 4px 15px rgba(0,0,0,0.03); border:1px solid #e5e8eb; }
+    .title-band { background-color:rgb(128,0,0); color:#ffffff; font-size:1.4rem; font-weight:800; text-align:center; padding:16px; border-radius:12px; margin-bottom:24px; letter-spacing:-0.5px; box-shadow:0 4px 10px rgba(128,0,0,0.2); }
+    [data-testid="stForm"] { background-color:transparent; border:none; padding:0; margin-bottom:24px; }
+    .admin-title { color:#191f28; font-weight:800; font-size:1.8rem; margin-top:20px; }
+    .sub-title { color:#191f28; font-size:1.4rem; margin-top:30px; font-weight:700; }
+    .config-title { color:#191f28; font-size:1.3rem; margin:0; font-weight:700; }
+    .main-title { color:#191f28; font-weight:800; font-size:1.3rem; margin-bottom:15px; }
+    .blue-title { color:#1e3c72; font-size:1.4rem; margin-top:10px; font-weight:800; }
+    .agent-title { color:#3182f6; font-weight:800; font-size:1.5rem; margin-top:0; text-align:center; }
+    .config-box { background:#f9fafb; padding:15px; border-radius:15px; border:1px solid #e5e8eb; margin-top:15px; }
+    .config-box-blue { background:#f0f4f8; padding:15px; border-radius:15px; border:1px solid #c7d2fe; margin-top:15px; }
+    .detail-box { background:#ffffff; padding:20px; border-radius:20px; border:2px solid #e5e8eb; margin-top:10px; margin-bottom:30px; }
+    .summary-card { background:linear-gradient(135deg,rgb(160,20,20) 0%,rgb(128,0,0) 100%); border-radius:20px; padding:32px 24px; margin-bottom:24px; border:none; box-shadow:0 10px 25px rgba(128,0,0,0.25); }
+    .cumulative-card { background:linear-gradient(135deg,#1e3c72 0%,#2a5298 100%); border-radius:20px; padding:32px 24px; margin-bottom:24px; border:none; box-shadow:0 10px 25px rgba(30,60,114,0.25); }
+    .summary-label { color:rgba(255,255,255,0.85); font-size:1.15rem; font-weight:600; margin-bottom:8px; }
+    .summary-total { color:#ffffff; font-size:2.6rem; font-weight:800; letter-spacing:-1px; margin-bottom:24px; white-space:nowrap; word-break:keep-all; }
+    .summary-item-name { color:rgba(255,255,255,0.95); font-size:1.15rem; }
+    .summary-item-val { color:#ffffff; font-size:1.3rem; font-weight:800; white-space:nowrap; }
+    .summary-divider { height:1px; background-color:rgba(255,255,255,0.2); margin:16px 0; }
+    .toss-card { background:#ffffff; border-radius:20px; padding:28px 24px; margin-bottom:16px; border:1px solid #e5e8eb; box-shadow:0 4px 20px rgba(0,0,0,0.03); }
+    .toss-title { font-size:1.6rem; font-weight:700; color:#191f28; margin-bottom:6px; letter-spacing:-0.5px; }
+    .toss-desc { font-size:1.15rem; color:rgb(128,0,0); font-weight:800; margin-bottom:24px; letter-spacing:-0.3px; line-height:1.4; word-break:keep-all; }
+    .data-row { display:flex; justify-content:space-between; align-items:center; padding:12px 0; flex-wrap:nowrap; }
+    .data-label { color:#8b95a1; font-size:1.1rem; word-break:keep-all; }
+    .data-value { color:#333d4b; font-size:1.3rem; font-weight:600; white-space:nowrap; }
+    .shortfall-row { background-color:#fff0f0; padding:14px; border-radius:12px; margin-top:15px; margin-bottom:5px; border:2px dashed #ff4b4b; text-align:center; }
+    .shortfall-text { color:#d9232e; font-size:1.2rem; font-weight:800; word-break:keep-all; }
+    .prize-row { display:flex; justify-content:space-between; align-items:center; padding-top:20px; margin-top:12px; flex-wrap:nowrap; }
+    .prize-label { color:#191f28; font-size:1.3rem; font-weight:700; word-break:keep-all; white-space:nowrap; }
+    .prize-value { color:rgb(128,0,0); font-size:1.8rem; font-weight:800; white-space:nowrap; text-align:right; }
+    .toss-divider { height:1px; background-color:#e5e8eb; margin:16px 0; }
+    .cumul-stack-box { background:#ffffff; border:1px solid #e5e8eb; border-left:6px solid #2a5298; border-radius:16px; padding:20px 24px; margin-bottom:16px; display:flex; justify-content:space-between; align-items:center; box-shadow:0 4px 15px rgba(0,0,0,0.03); }
+    .cumul-stack-info { display:flex; flex-direction:column; gap:4px; }
+    .cumul-stack-title { font-size:1.25rem; color:#1e3c72; font-weight:800; word-break:keep-all; }
+    .cumul-stack-val { font-size:1.05rem; color:#8b95a1; }
+    .cumul-stack-prize { font-size:1.6rem; color:#d9232e; font-weight:800; text-align:right; white-space:nowrap; }
+    div[data-testid="stTextInput"] input { font-size:1.3rem !important; padding:15px !important; height:55px !important; background-color:#ffffff !important; color:#191f28 !important; border:1px solid #e5e8eb !important; border-radius:12px !important; }
+    div[data-testid="stSelectbox"] > div { background-color:#ffffff !important; border:1px solid #e5e8eb !important; border-radius:12px !important; }
+    div[data-testid="stSelectbox"] * { font-size:1.1rem !important; }
+    div.stButton > button[kind="primary"] { font-size:1.4rem !important; font-weight:800 !important; height:60px !important; border-radius:12px !important; background-color:rgb(128,0,0) !important; color:white !important; border:none !important; width:100%; margin-top:10px; margin-bottom:20px; box-shadow:0 4px 15px rgba(128,0,0,0.2) !important; }
+    div.stButton > button[kind="secondary"] { font-size:1.2rem !important; font-weight:700 !important; min-height:60px !important; height:auto !important; padding:10px !important; border-radius:12px !important; background-color:#e8eaed !important; color:#191f28 !important; border:1px solid #d1d6db !important; width:100%; margin-top:5px; margin-bottom:5px; white-space:normal !important; }
+    /* 오늘 접촉 대상 카드 */
+    .contact-card { background:#ffffff; border-radius:20px; padding:22px 20px; margin-bottom:12px; border:1px solid #e5e8eb; box-shadow:0 4px 15px rgba(0,0,0,0.04); }
+    .contact-name { font-size:1.3rem; font-weight:800; color:#191f28; }
+    .contact-org { font-size:1.05rem; color:#8b95a1; margin-bottom:10px; }
+    .contact-prize-total { font-size:1.6rem; font-weight:800; color:rgb(128,0,0); text-align:right; }
+    .contact-shortfall { color:#d9232e; font-size:1.05rem; font-weight:700; }
+    .kakao-btn { display:block; width:100%; padding:14px; background:#FEE500; color:#3C1E1E; border:none; border-radius:12px; font-size:1.2rem; font-weight:800; cursor:pointer; text-align:center; margin-top:10px; box-shadow:0 3px 8px rgba(0,0,0,0.08); }
+    .kakao-btn:active { transform:scale(0.98); }
+    .copy-btn { display:block; width:100%; padding:14px; background:#FEE500; color:#3C1E1E; border:none; border-radius:12px; font-size:1.2rem; font-weight:800; cursor:pointer; text-align:center; margin-top:10px; box-shadow:0 3px 8px rgba(0,0,0,0.08); }
+    .msg-preview { background:#f9fafb; border:1px solid #e5e8eb; border-radius:12px; padding:14px; font-size:1.0rem; color:#333; white-space:pre-wrap; line-height:1.6; margin-top:8px; word-break:keep-all; }
+    @media (prefers-color-scheme: dark) {
+        [data-testid="stAppViewContainer"] { background-color:#121212 !important; color:#e0e0e0 !important; }
+        label, p, .stMarkdown p { color:#e0e0e0 !important; }
+        div[data-testid="stRadio"] > div { background-color:#1e1e1e !important; border-color:#333 !important; }
+        .admin-title,.sub-title,.config-title,.main-title { color:#ffffff !important; }
+        .blue-title,.agent-title { color:#66b2ff !important; }
+        .config-box { background-color:#1a1a1a !important; border-color:#333 !important; }
+        .config-box-blue { background-color:#121928 !important; border-color:#2a5298 !important; }
+        .detail-box { background-color:#121212 !important; border-color:#333 !important; }
+        .toss-card, .contact-card { background-color:#1e1e1e !important; border-color:#333 !important; }
+        .toss-title,.contact-name { color:#ffffff !important; } .toss-desc { color:#ff6b6b !important; }
+        .data-label,.contact-org { color:#a0aab5 !important; } .data-value { color:#ffffff !important; }
+        .prize-label { color:#ffffff !important; } .prize-value,.contact-prize-total { color:#ff4b4b !important; }
+        .toss-divider { background-color:#333 !important; }
+        .shortfall-row { background-color:#2a1215 !important; border-color:#ff4b4b !important; }
+        .shortfall-text,.contact-shortfall { color:#ff6b6b !important; }
+        .cumul-stack-box { background-color:#1e1e1e !important; border-color:#333 !important; border-left-color:#4da3ff !important; }
+        .cumul-stack-title { color:#4da3ff !important; } .cumul-stack-val { color:#a0aab5 !important; }
+        .cumul-stack-prize { color:#ff4b4b !important; }
+        div[data-testid="stTextInput"] input { background-color:#1e1e1e !important; color:#ffffff !important; border-color:#444 !important; }
+        div[data-testid="stSelectbox"] > div { background-color:#1e1e1e !important; color:#ffffff !important; border-color:#444 !important; }
+        div.stButton > button[kind="secondary"] { background-color:#2d2d2d !important; color:#ffffff !important; border-color:#444 !important; }
+        .msg-preview { background-color:#1a1a1a !important; border-color:#333 !important; color:#e0e0e0 !important; }
+    }
+    @media (max-width: 450px) {
+        .summary-total { font-size:2.1rem !important; } .prize-value { font-size:1.45rem !important; }
+        .toss-title { font-size:1.4rem !important; } .shortfall-text { font-size:1.05rem !important; }
+        .cumul-stack-title { font-size:1.15rem; } .cumul-stack-prize { font-size:1.4rem; }
+        .contact-prize-total { font-size:1.35rem !important; }
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ==========================================
+# ⚙️ 공통 함수
+# ==========================================
+def _read_prize_items(cfg, match_df):
     prize_details = []
     items = cfg.get('prize_items', [])
     if items:
         for item in items:
-            col_prize = item.get('col_prize', '') or item.get('col', '')  # 구형 호환
+            col_prize = item.get('col_prize', '') or item.get('col', '')
             label = item.get('label', '')
-            if not col_prize or col_prize not in match_df.columns:
-                continue
-            
-            # 대상 여부 확인 — ★ dropna() 적용
+            if not col_prize or col_prize not in match_df.columns: continue
             col_elig = item.get('col_eligible', '')
             if col_elig and col_elig in match_df.columns:
-                elig_series = match_df[col_elig].dropna()
-                elig_val = _safe_float_prize(elig_series.values[0]) if not elig_series.empty else 0
-                if elig_val == 0:
-                    continue
-            
-            # 시상금 읽기 — ★ dropna() 적용
-            prize_series = match_df[col_prize].dropna()
-            raw = prize_series.values[0] if not prize_series.empty else 0
-            amt = _safe_float_prize(raw)
+                raw_elig = match_df[col_elig].values[0]
+                if pd.notna(raw_elig) and str(raw_elig).strip() != '':
+                    if safe_float(raw_elig) == 0: continue
+            amt = safe_float(match_df[col_prize].values[0])
             prize_details.append({"label": label or col_prize, "amount": amt})
     else:
         col_prize = cfg.get('col_prize', '')
         if col_prize and col_prize in match_df.columns:
-            prize_series = match_df[col_prize].dropna()
-            raw = prize_series.values[0] if not prize_series.empty else 0
-            amt = _safe_float_prize(raw)
-            if amt != 0:
-                prize_details.append({"label": "시상금", "amount": amt})
+            amt = safe_float(match_df[col_prize].values[0])
+            if amt != 0: prize_details.append({"label": "시상금", "amount": amt})
     return prize_details
 
-def calculate_prize_for_code(target_code, prize_config, df_src):
-    """특정 사번의 시상금을 df_merged에서 직접 읽기
-    ★ 수정: 브릿지/구간 실적 값도 _first_valid()로 NaN 행 건너뜀"""
-    if not prize_config or df_src is None or df_src.empty:
-        return [], 0
-    results = []
-    safe_code = clean_key(str(target_code))
-    
-    for cfg in prize_config:
+def calculate_agent_performance(target_code):
+    calculated_results = []
+    for cfg_idx, cfg in enumerate(st.session_state['config']):
+        df = _get_merged_df(cfg_idx)
+        if df is None: continue
         col_code = cfg.get('col_code', '')
-        if not col_code or col_code not in df_src.columns:
-            continue
-        
-        _cc = f"_pclean_{col_code}"
-        if _cc not in df_src.columns:
-            df_src[_cc] = df_src[col_code].apply(clean_key)
-        match_df = df_src[df_src[_cc] == safe_code]
-        if match_df.empty:
-            continue
-        
+        if not col_code or col_code not in df.columns: continue
+        match_df = df[get_clean_series(df, col_code) == safe_str(target_code)]
+        if match_df.empty: continue
         cat = cfg.get('category', 'weekly')
         p_type = cfg.get('type', '구간 시책')
-        
-        # 시상금 여러 항목 읽기
-        prize_details = _read_prize_items_app(cfg, match_df)
+        prize_details = _read_prize_items(cfg, match_df)
         prize = sum(d['amount'] for d in prize_details)
-        
         if cat == 'weekly':
             if "1기간" in p_type:
-                if not prize_details: continue  # 미대상 → 항목 자체 미표시
-                # ★ 수정: _first_valid()로 NaN 행 건너뜀
-                val_prev = _safe_float_prize(_first_valid(match_df, cfg.get('col_val_prev', '')))
-                val_curr = _safe_float_prize(_first_valid(match_df, cfg.get('col_val_curr', '')))
-                results.append({"name": cfg['name'], "category": "weekly", "type": "브릿지1",
-                    "val_prev": val_prev, "val_curr": val_curr, "prize": prize, "prize_details": prize_details})
-
+                if not prize_details: continue
+                vp = safe_float(match_df[cfg['col_val_prev']].values[0]) if cfg.get('col_val_prev') and cfg['col_val_prev'] in df.columns else 0
+                vc = safe_float(match_df[cfg['col_val_curr']].values[0]) if cfg.get('col_val_curr') and cfg['col_val_curr'] in df.columns else 0
+                calculated_results.append({"name":cfg['name'],"desc":cfg.get('desc',''),"category":"weekly","type":"브릿지1","val_prev":vp,"val_curr":vc,"prize":prize,"prize_details":prize_details,"curr_req":float(cfg.get('curr_req',100000.0))})
             elif "2기간" in p_type:
-                # ★ 수정: _first_valid()로 NaN 행 건너뜀 (브릿지 버그 핵심 수정)
-                val_curr = _safe_float_prize(_first_valid(match_df, cfg.get('col_val_curr', '')))
-                
+                vp = safe_float(match_df[cfg['col_val_prev']].values[0]) if cfg.get('col_val_prev') and cfg['col_val_prev'] in df.columns else 0
+                vc = safe_float(match_df[cfg['col_val_curr']].values[0]) if cfg.get('col_val_curr') and cfg['col_val_curr'] in df.columns else 0
                 curr_req = float(cfg.get('curr_req', 100000.0))
-                calc_rate, tier_achieved, prize = 0, 0, 0
-                
+                calc_rate=0; tier_achieved=0; prize=0
                 for amt, rate in cfg.get('tiers', []):
-                    if val_curr >= amt:
-                        tier_achieved = amt
-                        calc_rate = rate
-                        break
-                
-                if tier_achieved > 0:
-                    prize = (tier_achieved + curr_req) * (calc_rate / 100)
-                
+                    if vp >= amt: tier_achieved=amt; calc_rate=rate; break
+                if tier_achieved > 0: prize = (tier_achieved + curr_req) * (calc_rate / 100)
                 next_tier = None
                 for amt, rate in reversed(cfg.get('tiers', [])):
-                    if val_curr < amt:
-                        next_tier = amt
-                        break
-                shortfall = next_tier - val_curr if next_tier else 0
-                
-                results.append({"name": cfg['name'], "category": "weekly", "type": "브릿지2",
-                    "val": val_curr, "tier": tier_achieved, "rate": calc_rate, "prize": prize,
-                    "curr_req": curr_req, "next_tier": next_tier, "shortfall": shortfall})
+                    if vp < amt: next_tier = amt; break
+                curr_met = vc >= curr_req
+                calculated_results.append({"name":cfg['name'],"desc":cfg.get('desc',''),"category":"weekly","type":"브릿지2","val_prev":vp,"val_curr":vc,"tier":tier_achieved,"rate":calc_rate,"prize":prize,"curr_req":curr_req,"next_tier":next_tier,"shortfall":next_tier - vp if next_tier else 0,"curr_met":curr_met})
             else:
-                if not prize_details: continue  # 미대상 → 항목 자체 미표시
-                # ★ 수정: _first_valid()로 NaN 행 건너뜀
-                val = _safe_float_prize(_first_valid(match_df, cfg.get('col_val', '')))
-                results.append({"name": cfg['name'], "category": "weekly", "type": "구간",
-                    "val": val, "prize": prize, "prize_details": prize_details})
-
+                if not prize_details: continue
+                v = safe_float(match_df[cfg['col_val']].values[0]) if cfg.get('col_val') and cfg['col_val'] in df.columns else 0
+                calculated_results.append({"name":cfg['name'],"desc":cfg.get('desc',''),"category":"weekly","type":"구간","val":v,"prize":prize,"prize_details":prize_details})
         elif cat == 'cumulative':
-            if not prize_details: continue  # 미대상 → 항목 자체 미표시
-            # ★ 수정: _first_valid()로 NaN 행 건너뜀
-            val = _safe_float_prize(_first_valid(match_df, cfg.get('col_val', '')))
-            results.append({"name": cfg['name'], "category": "cumulative", "type": "누계",
-                "val": val, "prize": prize, "prize_details": prize_details})
-    
-    # 총 시상 = 누계 + 브릿지만 (구간 시책은 누계에 이미 포함되므로 제외)
-    cumul_sum = sum(r['prize'] for r in results if r['category'] == 'cumulative')
-    bridge_sum = sum(r['prize'] for r in results if r['category'] == 'weekly' and '브릿지' in r['type'])
-    total = cumul_sum + bridge_sum
-    return results, total
+            if not prize_details: continue
+            col_val = cfg.get('col_val', '')
+            v = safe_float(match_df[col_val].values[0]) if col_val and col_val in match_df.columns else 0
+            calculated_results.append({"name":cfg['name'],"desc":cfg.get('desc',''),"category":"cumulative","type":"누계","val":v,"prize":prize,"prize_details":prize_details})
+    return calculated_results, sum(r['prize'] for r in calculated_results)
 
-def format_prize_clip_text(results, total):
-    if not results: return ""
-    gugan_res = [r for r in results if r['category'] == 'weekly' and r['type'] == '구간']
-    bridge_res = [r for r in results if r['category'] == 'weekly' and '브릿지' in r['type']]
-    cumul_res = [r for r in results if r['category'] == 'cumulative']
-    cumul_sum = sum(r['prize'] for r in cumul_res)
-    bridge_sum = sum(r['prize'] for r in bridge_res)
-    
-    lines = ["", "💰 예상 시상금 현황", f"  총 시상금: {total:,.0f}원"]
-    if cumul_sum > 0 or bridge_sum > 0:
-        parts = []
-        if cumul_sum > 0: parts.append(f"누계 {cumul_sum:,.0f}")
-        if bridge_sum > 0: parts.append(f"브릿지 {bridge_sum:,.0f}")
-        lines.append(f"  ({' + '.join(parts)})")
-    for r in gugan_res:
-        if r['prize'] > 0:
-            lines.append(f"  {r['name']}: {r['prize']:,.0f}원 (누계포함)")
-            for d in r.get('prize_details', []):
-                lines.append(f"    · {d['label']}: {d['amount']:,.0f}원")
-    for r in bridge_res:
-        if r['prize'] > 0:
-            if r['type'] == '브릿지2':
-                lines.append(f"  {r['name']}: {r['prize']:,.0f}원 (당월 {int(r.get('curr_req',100000)//10000)}만 가동 시)")
-                if r.get('shortfall', 0) > 0:
-                    lines.append(f"    🚀 다음 구간까지 {r['shortfall']:,.0f}원")
+def render_ui_cards(user_name, calculated_results, total_prize_sum, show_share_text=False):
+    if not calculated_results: return
+    weekly_res = [r for r in calculated_results if r['category'] == 'weekly']
+    cumul_res = [r for r in calculated_results if r['category'] == 'cumulative']
+    weekly_total = sum(r['prize'] for r in weekly_res)
+    cumul_total = sum(r['prize'] for r in cumul_res)
+    share_text = f"🎯 [{user_name} 팀장님 실적 현황]\n💰 총 합산 시상금: {total_prize_sum:,.0f}원\n────────────────\n"
+    if weekly_res:
+        sh = f"<div class='summary-card'><div class='summary-label'>{user_name} 팀장님의 시책 현황</div><div class='summary-total'>{weekly_total:,.0f}원</div><div class='summary-divider'></div>"
+        share_text += "📌 [진행 중인 시책]\n"
+        for res in weekly_res:
+            if res['type'] == "브릿지1":
+                sh += f"<div class='data-row' style='padding:6px 0;align-items:flex-start;'><span class='summary-item-name'>{res['name']}<br><span style='font-size:0.95rem;color:rgba(255,255,255,0.7);'>(다음 달 {int(res['curr_req']//10000)}만 가동 조건)</span></span><span class='summary-item-val'>{res['prize']:,.0f}원</span></div>"
+                share_text += f"🔹 {res['name']}: {res['prize']:,.0f}원 (다음 달 {int(res['curr_req']//10000)}만 가동 조건)\n"
+            elif res['type'] == "브릿지2":
+                sh += f"<div class='data-row' style='padding:6px 0;align-items:flex-start;'><span class='summary-item-name'>{res['name']}<br><span style='font-size:0.95rem;color:rgba(255,255,255,0.7);'>(이번 달 {int(res['curr_req']//10000)}만 가동 조건)</span></span><span class='summary-item-val'>{res['prize']:,.0f}원</span></div>"
+                share_text += f"🔹 {res['name']}: {res['prize']:,.0f}원 (이번 달 {int(res['curr_req']//10000)}만 가동 조건)\n"
             else:
-                lines.append(f"  {r['name']}: {r['prize']:,.0f}원")
-                for d in r.get('prize_details', []):
-                    lines.append(f"    · {d['label']}: {d['amount']:,.0f}원")
-    for r in cumul_res:
-        if r['prize'] > 0:
-            lines.append(f"  {r['name']}: {r['prize']:,.0f}원")
-            for d in r.get('prize_details', []):
-                lines.append(f"    · {d['label']}: {d['amount']:,.0f}원")
-    return '\n'.join(lines)
-
-def _prize_detail_sub_html(details):
-    """시상금 항목이 2개 이상일 때 상세 내역 HTML"""
-    if len(details) <= 1: return ""
-    h = ""
-    for d in details:
-        h += f'<div class="m-row"><span class="m-label" style="padding-left:10px;font-size:11px;">· {d["label"]}</span><span class="m-val" style="font-size:11px;">{d["amount"]:,.0f}원</span></div>'
-    return h
-
-def build_prize_card_html(results, total):
-    if not results: return ""
-    gugan_res = [r for r in results if r['category'] == 'weekly' and r['type'] == '구간']
-    bridge_res = [r for r in results if r['category'] == 'weekly' and '브릿지' in r['type']]
-    cumul_res = [r for r in results if r['category'] == 'cumulative']
-    cumul_sum = sum(r['prize'] for r in cumul_res)
-    bridge_sum = sum(r['prize'] for r in bridge_res)
-    
-    h = '<div style="margin-top:8px; padding:10px; background:#fff8f0; border-radius:10px; border:1px solid #ffd4a8;">'
-    h += f'<div style="font-weight:800;color:#d9232e;font-size:15px;margin-bottom:2px;">💰 총 시상금: {total:,.0f}원</div>'
-    if cumul_sum > 0 or bridge_sum > 0:
-        parts = []
-        if cumul_sum > 0: parts.append(f"누계 {cumul_sum:,.0f}")
-        if bridge_sum > 0: parts.append(f"브릿지 {bridge_sum:,.0f}")
-        h += f'<div style="font-size:11px;color:#888;margin-bottom:6px;">({" + ".join(parts)})</div>'
-    if gugan_res:
-        h += '<div style="font-size:11px;color:#4e5968;font-weight:700;margin-top:4px;">📌 시책 진행 (누계에 포함)</div>'
-        for r in gugan_res:
-            pz = f"{r['prize']:,.0f}원" if r['prize'] > 0 else "0원"
-            h += f'<div class="m-row"><span class="m-label">{r["name"]}</span><span class="m-val" style="color:#888;font-weight:600;">{pz}</span></div>'
-            h += _prize_detail_sub_html(r.get('prize_details', []))
-    if bridge_res:
-        h += '<div style="font-size:11px;color:#d4380d;font-weight:700;margin-top:4px;">🌉 브릿지 시상</div>'
-        for r in bridge_res:
-            pz = f"{r['prize']:,.0f}원" if r['prize'] > 0 else "0원"
-            if r['type'] == '브릿지2':
-                label = f"{r['name']}<br><span style='font-size:10px;color:#888;'>(당월 {int(r.get('curr_req',100000)//10000)}만 가동 시)</span>"
-                h += f'<div class="m-row"><span class="m-label">{label}</span><span class="m-val" style="color:#d9232e;font-weight:700;">{pz}</span></div>'
-                if r.get('shortfall', 0) > 0:
-                    h += f'<div class="m-row"><span class="m-label" style="padding-left:10px;font-size:10px;color:#888;">🚀 다음 구간까지 {r["shortfall"]:,.0f}원</span><span class="m-val"></span></div>'
-            else:
-                h += f'<div class="m-row"><span class="m-label">{r["name"]}</span><span class="m-val" style="color:#d9232e;font-weight:700;">{pz}</span></div>'
-                h += _prize_detail_sub_html(r.get('prize_details', []))
+                sh += f"<div class='data-row' style='padding:6px 0;'><span class='summary-item-name'>{res['name']}</span><span class='summary-item-val'>{res['prize']:,.0f}원</span></div>"
+                share_text += f"🔹 {res['name']}: {res['prize']:,.0f}원\n"
+        sh += "</div>"
+        st.markdown(sh, unsafe_allow_html=True)
+        for res in weekly_res:
+            desc_html = res['desc'].replace('\n','<br>') if res.get('desc') else ''
+            details = res.get('prize_details', [])
+            pdh = ""
+            if len(details) > 1:
+                for d in details: pdh += f"<div class='data-row'><span class='data-label'>{d['label']}</span><span class='data-value' style='color:rgb(128,0,0);'>{d['amount']:,.0f}원</span></div>"
+                pdh += "<div class='toss-divider'></div>"
+            if res['type'] == "구간":
+                ch = f"<div class='toss-card'><div class='toss-title'>{res['name']}</div><div class='toss-desc'>{desc_html}</div><div class='data-row'><span class='data-label'>현재 누적 실적</span><span class='data-value'>{res['val']:,.0f}원</span></div><div class='toss-divider'></div>{pdh}<div class='prize-row'><span class='prize-label'>확보한 시상금</span><span class='prize-value'>{res['prize']:,.0f}원</span></div></div>"
+                share_text += f"\n[{res['name']}]\n- 현재실적: {res['val']:,.0f}원\n- 확보금액: {res['prize']:,.0f}원\n"
+                for d in details: share_text += f"  · {d['label']}: {d['amount']:,.0f}원\n"
+            elif res['type'] == "브릿지1":
+                ch = f"<div class='toss-card'><div class='toss-title'>{res['name']}</div><div class='toss-desc'>{desc_html}</div><div class='data-row'><span class='data-label'>전월 실적</span><span class='data-value'>{res['val_prev']:,.0f}원</span></div><div class='data-row'><span class='data-label'>당월 실적</span><span class='data-value'>{res['val_curr']:,.0f}원</span></div><div class='toss-divider'></div>{pdh}<div class='prize-row'><span class='prize-label'>다음 달 {int(res['curr_req']//10000)}만 가동 시<br>시상금</span><span class='prize-value'>{res['prize']:,.0f}원</span></div></div>"
+                share_text += f"\n[{res['name']}]\n- 전월실적: {res['val_prev']:,.0f}원\n- 당월실적: {res['val_curr']:,.0f}원\n- 예상시상: {res['prize']:,.0f}원 (다음 달 {int(res['curr_req']//10000)}만 가동 조건)\n"
+                for d in details: share_text += f"  · {d['label']}: {d['amount']:,.0f}원\n"
+            elif res['type'] == "브릿지2":
+                curr_req_val = int(res['curr_req']//10000)
+                if res.get('curr_met'):
+                    curr_status = f"<div class='data-row'><span class='data-label'>이번 달 {curr_req_val}만 가동</span><span class='data-value' style='color:#2e7d32;font-weight:800;'>✅ 달성</span></div>"
+                    prize_label = "예상 시상금"
+                else:
+                    curr_short = res['curr_req'] - res['val_curr']
+                    curr_status = f"<div class='data-row'><span class='data-label'>이번 달 {curr_req_val}만 가동</span><span class='data-value' style='color:#d9232e;font-weight:800;'>❌ 미달 ({curr_short:,.0f}원 부족)</span></div>"
+                    prize_label = f"이번 달 {curr_req_val}만 달성 시<br>예상 시상금"
+                ch = f"<div class='toss-card'><div class='toss-title'>{res['name']}</div><div class='toss-desc'>{desc_html}</div><div class='data-row'><span class='data-label'>전월 브릿지 실적</span><span class='data-value'>{res['val_prev']:,.0f}원</span></div><div class='data-row'><span class='data-label'>확보한 구간 기준</span><span class='data-value'>{res['tier']:,.0f}원</span></div><div class='data-row'><span class='data-label'>예상 적용 지급률</span><span class='data-value'>{res['rate']:g}%</span></div><div class='toss-divider'></div><div class='data-row'><span class='data-label'>당월 실적</span><span class='data-value'>{res['val_curr']:,.0f}원</span></div>{curr_status}<div class='toss-divider'></div><div class='prize-row'><span class='prize-label'>{prize_label}</span><span class='prize-value'>{res['prize']:,.0f}원</span></div></div>"
+                met_txt = "달성 ✅" if res.get('curr_met') else "미달 ❌"
+                share_text += f"\n[{res['name']}]\n- 전월실적: {res['val_prev']:,.0f}원 (구간: {res['tier']:,.0f}원)\n- 당월실적: {res['val_curr']:,.0f}원 ({curr_req_val}만 가동 {met_txt})\n- 예상시상: {res['prize']:,.0f}원\n"
+            st.markdown(ch, unsafe_allow_html=True)
     if cumul_res:
-        h += '<div style="font-size:11px;color:#2B6CB0;font-weight:700;margin-top:4px;">📈 누계 시상</div>'
-        for r in cumul_res:
-            pz = f"{r['prize']:,.0f}원" if r['prize'] > 0 else "0원"
-            h += f'<div class="m-row"><span class="m-label">{r["name"]}</span><span class="m-val" style="color:#d9232e;font-weight:700;">{pz}</span></div>'
-            h += _prize_detail_sub_html(r.get('prize_details', []))
-    h += '</div>'
-    return h
+        ch = f"<div class='cumulative-card'><div class='summary-label'>{user_name} 팀장님의 월간 누계 시상</div><div class='summary-total'>{cumul_total:,.0f}원</div><div class='summary-divider'></div>"
+        share_text += f"\n🏆 [월간 확정 누계 시상]\n"
+        for res in cumul_res:
+            ch += f"<div class='data-row' style='padding:6px 0;'><span class='summary-item-name'>{res['name']}</span><span class='summary-item-val'>{res['prize']:,.0f}원</span></div>"
+            share_text += f"🔹 {res['name']}: {res['prize']:,.0f}원 (누계 {res['val']:,.0f}원)\n"
+        ch += "</div>"
+        st.markdown(ch, unsafe_allow_html=True)
+        st.markdown("<h3 class='blue-title'>📈 세부 항목별 시상금</h3>", unsafe_allow_html=True)
+        sh = ""
+        for res in cumul_res:
+            details = res.get('prize_details', [])
+            dl = ""
+            if len(details) > 1:
+                for d in details: dl += f"<span class='cumul-stack-val'>{d['label']}: {d['amount']:,.0f}원</span>"
+            else: dl = f"<span class='cumul-stack-val'>누계실적: {res['val']:,.0f}원</span>"
+            sh += f"<div class='cumul-stack-box'><div class='cumul-stack-info'><span class='cumul-stack-title'>{res['name']}</span>{dl}</div><div class='cumul-stack-prize'>{res['prize']:,.0f}원</div></div>"
+        st.markdown(sh, unsafe_allow_html=True)
+    if show_share_text:
+        st.markdown("<h4 class='main-title' style='margin-top:10px;'>💬 카카오톡 바로 공유하기</h4>", unsafe_allow_html=True)
+        copy_btn_component(share_text)
 
-
-if 'df_merged' not in st.session_state:
-    _reset_session_state()
-    load_data_and_config()
 
 # ==========================================
-# 2. 데이터 정제 및 스마트 조건 평가 함수
+# 📞 오늘 접촉 대상 - 카카오 전송 컴포넌트
 # ==========================================
-def decode_excel_text(val):
-    if pd.isna(val): return val
-    val_str = str(val)
-    if '_x' not in val_str: return val_str
-    def decode_match(match):
-        try: return chr(int(match.group(1), 16))
-        except: return match.group(0)
-    return re.sub(r'_x([0-9a-fA-F]{4})_', decode_match, val_str)
-
-def clean_key(val):
-    if pd.isna(val) or str(val).strip().lower() == 'nan': return ""
-    val_str = str(val).strip().replace(" ", "").upper()
-    if val_str.endswith('.0'): val_str = val_str[:-2]
-    return val_str
-
-# 숫자/텍스트 혼동 및 콤마 완벽 해결 평가 함수
-def evaluate_condition(df, col, cond):
-    cond_clean = re.sub(r'(?<=\d),(?=\d)', '', cond).strip()
-    # ✅ 단일 = 를 == 로 자동 변환 (>=, <=, !=, == 는 건드리지 않음)
-    cond_clean = re.sub(r'(?<![><!= ])=(?!=)', '==', cond_clean)
-    try:
-        temp_s = df[col].astype(str).str.replace(',', '', regex=False)
-        num_s = pd.to_numeric(temp_s, errors='coerce')
-        if num_s.isna().all() and not temp_s.replace('', np.nan).isna().all():
-            raise ValueError("문자형 데이터입니다.")
-        temp_df = pd.DataFrame({col: num_s.fillna(0)})
-        mask = temp_df.eval(f"`{col}` {cond_clean}", engine='python')
-        if isinstance(mask, pd.Series): return mask.fillna(False).astype(bool)
-        else: return pd.Series(bool(mask), index=df.index)
-    except Exception:
-        try:
-            mask = df.eval(f"`{col}` {cond_clean}", engine='python')
-            if isinstance(mask, pd.Series): return mask.fillna(False).astype(bool)
-            else: return pd.Series(bool(mask), index=df.index)
-        except Exception:
-            return pd.Series(False, index=df.index)
-
-@st.cache_data(show_spinner=False)
-def load_file_data(file_bytes, file_name):
-    if file_name.endswith('.csv'):
-        df = pd.read_csv(io.BytesIO(file_bytes), encoding='utf-8', errors='replace')
-    else:
-        df = pd.read_excel(io.BytesIO(file_bytes))
-    df.columns = [decode_excel_text(c) if isinstance(c, str) else c for c in df.columns]
-    for col in df.columns:
-        if df[col].dtype == object:
-            df[col] = df[col].apply(decode_excel_text)
-    return df
-
-# ==========================================
-# ★ HTML 테이블 렌더링 함수
-# ==========================================
-def render_html_table(df, col_groups=None, prize_data_map=None):
-    """DataFrame을 틀 고정 + 그룹 헤더 + 정렬 + 반응형 HTML 테이블로 변환"""
-    table_id = f"perf_{uuid.uuid4().hex[:8]}"
-    num_cols = len(df.columns)
-    shortfall_cols = set(c for c in df.columns if '부족금액' in c)
-    col_groups = col_groups or []
-    has_groups = len(col_groups) > 0
-    
-    freeze_keywords = ['순번', '맞춤분류', '설계사', '성명', '이름', '팀장', '대리점']
-    freeze_count = 0
-    for i, col in enumerate(df.columns):
-        if any(kw in col for kw in freeze_keywords):
-            freeze_count = i + 1
-    freeze_count = min(freeze_count, 4)
-
-    base_font = max(11, 15 - num_cols // 3)
-    grp_h = 30
-    col_h = 36
-    
-    GROUP_COLORS = [
-        '#2B6CB0', '#2F855A', '#9B2C2C', '#6B46C1',
-        '#B7791F', '#2C7A7B', '#C05621', '#702459',
-    ]
-    
-    col_to_group = {}
-    group_color_map = {}
-    for gi, grp in enumerate(col_groups):
-        color = GROUP_COLORS[gi % len(GROUP_COLORS)]
-        group_color_map[grp['name']] = color
-        for c in grp['cols']:
-            col_to_group[c] = grp['name']
-    
-    columns = list(df.columns)
-    
-    group_mid = {}
-    for gname in set(col_to_group.values()):
-        indices = [i for i, c in enumerate(columns) if col_to_group.get(c) == gname]
-        if indices:
-            group_mid[gname] = indices[len(indices) // 2]
-    
-    group_info = []
-    for i, col in enumerate(columns):
-        gname = col_to_group.get(col, None)
-        if gname is None:
-            group_info.append((None, False, False, False))
-        else:
-            prev_grp = col_to_group.get(columns[i-1], None) if i > 0 else None
-            next_grp = col_to_group.get(columns[i+1], None) if i < len(columns)-1 else None
-            is_first = (prev_grp != gname)
-            is_last = (next_grp != gname)
-            is_text = (i == group_mid.get(gname, -1))
-            group_info.append((gname, is_first, is_last, is_text))
-    
-    def fc(i):
-        if i >= freeze_count: return ""
-        c = "col-freeze"
-        if i == freeze_count - 1: c += " col-freeze-last"
-        return c
-
-    mob_font = max(9, base_font - 2)
-    
+def render_kakao_send_btn(msg_key, agent_name, btn_key, height=80):
+    """
+    버튼 클릭 시 parent DOM의 textarea 현재값을 직접 읽어 전송.
+    msg_key를 aria-label 검색용 식별자로 사용.
+    """
     html = f"""
-    <style>
-    @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
-    * {{ box-sizing: border-box; }}
-    html, body {{ margin: 0; padding: 0; font-family: 'Pretendard', -apple-system, 'Noto Sans KR', sans-serif; }}
-    .perf-table-wrap {{
-        width: 100%; max-height: 85vh; overflow: auto;
-        border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.08);
-        -webkit-overflow-scrolling: touch;
-    }}
-    .perf-table {{
-        width: max-content; min-width: 100%;
-        border-collapse: separate; border-spacing: 0;
-        white-space: nowrap; font-size: {base_font}px;
-    }}
-    .perf-table thead th {{
-        background-color: #4e5968; color: #fff; font-weight: 700;
-        text-align: center; border: 1px solid #3d4654;
-        position: sticky; z-index: 2; white-space: nowrap;
-    }}
-    .perf-table .rg th {{ top: 0; height: {grp_h}px; padding: 4px 6px; cursor: default; }}
-    .perf-table .rg .ge {{ background: #4e5968; border-bottom-color: #4e5968; }}
-    .perf-table .rg .gc {{ border-left: none; border-right: none; }}
-    .perf-table .rg .gc-first {{ border-left: 1px solid #3d4654; border-right: none; }}
-    .perf-table .rg .gc-last {{ border-left: none; border-right: 1px solid #3d4654; }}
-    .perf-table .rg .gc-solo {{ border-left: 1px solid #3d4654; border-right: 1px solid #3d4654; }}
-    .perf-table .rc th .grp-bar {{
-        display: none;
-        height: 4px; border-radius: 2px;
-        margin: 0 auto 3px auto; width: 80%;
-    }}
-    .perf-table .rc th {{
-        top: {grp_h if has_groups else 0}px; height: {col_h}px;
-        padding: 6px 10px; cursor: pointer; user-select: none;
-    }}
-    .perf-table thead th:hover {{ background-color: #3d4654; }}
-    .sa {{ margin-left: 3px; font-size: 10px; opacity: 0.5; }}
-    .sa.active {{ opacity: 1; }}
-    .perf-table tbody td {{
-        text-align: center; padding: 6px 10px;
-        border: 1px solid #e5e8eb; white-space: nowrap;
-        background-color: #fff;
-    }}
-    .perf-table tbody tr:nth-child(even) td {{ background-color: #f7f8fa; }}
-    .perf-table tbody tr:hover td {{ background-color: #eef1f6; }}
-    .sc {{ color: rgb(128, 0, 0); font-weight: 700; }}
-    .col-freeze {{ position: sticky; z-index: 1; }}
-    thead th.col-freeze {{ z-index: 3; }}
-    .col-freeze-last {{ box-shadow: 2px 0 5px rgba(0,0,0,0.08); }}
-    
-    @media (max-width: 1200px) {{
-        .perf-table {{ font-size: {max(10, 13 - num_cols // 3)}px; }}
-        .perf-table thead th, .perf-table tbody td {{ padding: 5px 6px; }}
-    }}
-    @media (max-width: 768px) {{
-        .perf-table-wrap {{ max-height: 75vh; border-radius: 8px; }}
-        .perf-table {{ font-size: {mob_font}px; }}
-        .perf-table thead th {{ padding: 4px 5px; }}
-        .perf-table tbody td {{ padding: 4px 5px; }}
-        .perf-table .rg {{ display: none; }}
-        .perf-table .rc th {{ top: 0 !important; padding: 5px 5px 4px 5px; }}
-        .perf-table .rc th .grp-bar {{ display: block; }}
-        .sa {{ font-size: 8px; margin-left: 1px; }}
-        .col-freeze-last {{ box-shadow: 2px 0 3px rgba(0,0,0,0.12); }}
-    }}
-    @media (max-width: 480px) {{
-        .perf-table {{ font-size: {max(8, mob_font - 1)}px; }}
-        .perf-table thead th, .perf-table tbody td {{ padding: 3px 3px; }}
-        .perf-table .rc th {{ padding: 4px 3px 3px 3px; }}
-        .perf-table .rc th .grp-bar {{ height: 3px; margin-bottom: 2px; }}
-    }}
-    
-    .desktop-view {{ display: block; }}
-    .mobile-view {{ display: none; }}
-    
-    @media (max-width: 768px) {{
-        .desktop-view {{ display: none !important; }}
-        .mobile-view {{ display: block !important; }}
-    }}
-    
-    .mobile-view {{
-        padding: 0 4px;
-        max-height: 80vh;
-        overflow-y: auto;
-        -webkit-overflow-scrolling: touch;
-    }}
-    .m-card {{
-        background: #fff; border-radius: 12px;
-        margin-bottom: 10px; overflow: hidden;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-        border: 1px solid #e5e8eb;
-    }}
-    .m-card-head {{
-        display: flex; align-items: center; flex-wrap: wrap;
-        padding: 14px 14px 12px; cursor: pointer;
-        gap: 6px; position: relative;
-    }}
-    .m-num {{
-        background: #4e5968; color: #fff;
-        font-size: 11px; font-weight: 700;
-        width: 24px; height: 24px; border-radius: 50%;
-        display: flex; align-items: center; justify-content: center;
-        flex-shrink: 0;
-    }}
-    .m-name {{
-        font-size: 16px; font-weight: 700; color: #191f28;
-    }}
-    .m-summary {{
-        display: flex; gap: 6px; margin-left: auto; flex-shrink: 0;
-    }}
-    .m-goal {{
-        font-size: 12px; background: #EBF5FB; color: #2B6CB0;
-        padding: 2px 8px; border-radius: 10px; font-weight: 600;
-    }}
-    .m-sc {{
-        font-size: 12px; background: #FFF5F5; color: rgb(128,0,0);
-        padding: 2px 8px; border-radius: 10px; font-weight: 700;
-    }}
-    .m-chevron {{
-        font-size: 10px; color: #8b95a1; margin-left: 6px;
-        transition: transform 0.2s;
-    }}
-    .m-card.open .m-chevron {{ transform: rotate(180deg); }}
-    .m-card-body {{
-        max-height: 0; overflow: hidden;
-        transition: max-height 0.3s ease;
-        border-top: 1px solid #f2f4f6;
-    }}
-    .m-card.open .m-card-body {{
-        max-height: 2000px;
-    }}
-    .m-grp-label {{
-        font-size: 12px; font-weight: 700; color: #4e5968;
-        padding: 8px 14px 4px; margin-top: 4px;
-    }}
-    .m-row {{
-        display: flex; justify-content: space-between;
-        padding: 6px 14px; font-size: 14px;
-    }}
-    .m-row:nth-child(even) {{ background: #f9fafb; }}
-    .m-label {{ color: #6b7684; font-weight: 500; flex-shrink: 0; margin-right: 12px; }}
-    .m-val {{ color: #191f28; font-weight: 600; text-align: right; }}
-    .m-row.m-sc .m-val {{ color: rgb(128,0,0); font-weight: 800; }}
-    
-    .m-copy-wrap {{
-        padding: 10px 14px 6px; text-align: center;
-    }}
-    .m-copy-btn {{
-        width: 100%; padding: 10px; border: none; border-radius: 10px;
-        background: linear-gradient(135deg, #FEE500 0%, #F5D600 100%);
-        color: #3C1E1E; font-size: 14px; font-weight: 700;
-        cursor: pointer; transition: all 0.2s;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.08);
-    }}
-    .m-copy-btn:active {{ transform: scale(0.97); }}
-    .m-copy-btn.copied {{
-        background: linear-gradient(135deg, #22C55E 0%, #16A34A 100%);
-        color: #fff;
-    }}
-    .d-copy-btn {{
-        border: none; border-radius: 6px; padding: 4px 10px;
-        background: #FEE500; color: #3C1E1E;
-        font-size: 12px; font-weight: 700; cursor: pointer;
-        white-space: nowrap; transition: all 0.15s;
-    }}
-    .d-copy-btn:hover {{ background: #F5D600; }}
-    .d-copy-btn.copied {{ background: #22C55E; color: #fff; }}
-    </style>
-    """
-
-    html += '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
-    html += '<div class="desktop-view">'
-    html += f'<div class="perf-table-wrap" id="wrap_{table_id}"><table class="perf-table" id="{table_id}"><thead>'
-    
-    if has_groups:
-        html += '<tr class="rg">'
-        for i, col in enumerate(columns):
-            gname, is_first, is_last, is_text = group_info[i]
-            f_cls = fc(i)
-            if gname is None:
-                html += f'<th class="ge {f_cls}" data-col="{i}"></th>'
-            else:
-                gc = group_color_map.get(gname, '#364152')
-                if is_first and is_last: b_cls = "gc-solo"
-                elif is_first: b_cls = "gc-first"
-                elif is_last: b_cls = "gc-last"
-                else: b_cls = "gc"
-                text = gname if is_text else ""
-                html += f'<th class="{b_cls} {f_cls}" style="background:{gc};" data-col="{i}">{text}</th>'
-        html += '<th class="ge" data-col="-1"></th>'
-        html += '</tr>'
-    html += '<tr class="rc">'
-    for i, col in enumerate(columns):
-        f_cls = fc(i)
-        gname = col_to_group.get(col, None)
-        if gname:
-            gc = group_color_map.get(gname, '#364152')
-            bar = f'<div class="grp-bar" style="background:{gc};"></div>'
-        else:
-            bar = ''
-        html += f'<th class="{f_cls}" data-col="{i}" onclick="sortTable(this)">{bar}{col} <span class="sa">▲▼</span></th>'
-    html += '<th data-col="-1" style="min-width:50px; cursor:default;">복사</th>'
-    html += '</tr></thead><tbody>'
-
-    for row_idx, (_, row) in enumerate(df.iterrows()):
-        html += '<tr>'
-        for i, col in enumerate(columns):
-            val = row[col]
-            cell_val = "" if pd.isna(val) else str(val)
-            f_cls = fc(i)
-            extra = " sc" if (col in shortfall_cols and cell_val != "") else ""
-            html += f'<td class="{f_cls}{extra}" data-col="{i}">{cell_val}</td>'
-        html += f'<td data-col="-1"><button class="d-copy-btn" onclick="copyClip({row_idx}, this, event)">📋</button>'
-        if prize_data_map and row_idx in prize_data_map:
-            html += f'<button class="d-copy-btn" onclick="showPrize({row_idx}, event)" style="margin-left:2px;">💰</button>'
-        html += '</td>'
-        html += '</tr>'
-    html += '</tbody></table></div>'
-    html += '</div>'
-    
-    # ══════════════════════════════════════════
-    # 📋 각 행별 클립보드 텍스트 생성
-    # ══════════════════════════════════════════
-    columns = list(df.columns)
-    
-    name_col = None
-    name_keywords = ['설계사명', '성명', '이름', '팀장명']
-    for c in columns:
-        if any(kw in c for kw in name_keywords):
-            name_col = c
-            break
-    
-    clip_name_keywords = ['지사', '설계사명', '성명', '이름', '팀장명']
-    goal_keywords = ['다음목표', '부족금액']
-    
-    clip_name_cols = []
-    data_cols = []
-    for c in columns:
-        if c == '순번' or c == '맞춤분류':
-            continue
-        if any(kw in c for kw in goal_keywords):
-            data_cols.append(c)
-        elif any(kw in c for kw in clip_name_keywords) and '코드' not in c and '번호' not in c:
-            clip_name_cols.append(c)
-        else:
-            data_cols.append(c)
-    
-    col_to_grp = {}
-    for grp in col_groups:
-        for c in grp['cols']:
-            col_to_grp[c] = grp['name']
-    
-    data_date = ''
-    clip_footer = ''
-    try:
-        data_date = st.session_state.get('data_date', '')
-        clip_footer = st.session_state.get('clip_footer', '')
-    except Exception:
-        pass
-    if not clip_footer.strip():
-        clip_footer = "팀장님! 시상 부족금액 안내드려요!\n부족한 거 챙겨서 꼭 시상 많이 받아 가셨으면 좋겠습니다!\n좋은 하루 되세요!"
-    
-    clip_texts = []
-    for row_idx, (_, row) in enumerate(df.iterrows()):
-        name_parts = []
-        for c in clip_name_cols:
-            v = str(row[c]) if not pd.isna(row[c]) else ''
-            if v.strip() and v != '0':
-                name_parts.append(v.strip())
-        person_line = ' '.join(name_parts)
-        if person_line and not person_line.endswith('님'):
-            person_line += ' 팀장님'
-        
-        lines = []
-        lines.append("📋 메리츠 시상 현황 안내")
-        if data_date:
-            lines.append(f"📅 기준일: {data_date}")
-        lines.append("")
-        lines.append(f"👤 {person_line}")
-        lines.append("")
-        
-        current_group = None
-        for c in data_cols:
-            if '코드' in c or '번호' in c:
-                continue
-            val = str(row[c]) if not pd.isna(row[c]) else ''
-            if not val.strip() or val == '0':
-                continue
-            
-            grp = col_to_grp.get(c)
-            is_goal = any(kw in c for kw in goal_keywords)
-            
-            if grp and grp != current_group:
-                if current_group is not None:
-                    lines.append("")
-                lines.append(f"━━ {grp} ━━")
-                current_group = grp
-            elif grp is None and not is_goal and current_group is not None:
-                lines.append("")
-                current_group = None
-            
-            if '부족금액' in c:
-                lines.append(f"🔴 {c}: {val}")
-            elif '다음목표' in c:
-                lines.append(f"🎯 {c}: {val}")
-            else:
-                lines.append(f"  {c}: {val}")
-        
-        if prize_data_map and row_idx in prize_data_map:
-            p_results, p_total = prize_data_map[row_idx]
-            prize_text = format_prize_clip_text(p_results, p_total)
-            if prize_text:
-                lines.append(prize_text)
-        
-        if clip_footer:
-            lines.append("")
-            lines.append(clip_footer)
-        
-        clip_texts.append('\n'.join(lines))
-    
-    import base64 as _b64
-    clip_json_bytes = json.dumps(clip_texts, ensure_ascii=False).encode('utf-8')
-    clip_b64 = _b64.b64encode(clip_json_bytes).decode('ascii')
-    
-    # 💰 시상금 HTML 데이터 (행별)
-    prize_htmls = []
-    for row_idx in range(len(df)):
-        if prize_data_map and row_idx in prize_data_map:
-            p_results, p_total = prize_data_map[row_idx]
-            p_gugan = [r for r in p_results if r['category'] == 'weekly' and r['type'] == '구간']
-            p_bridge = [r for r in p_results if r['category'] == 'weekly' and '브릿지' in r['type']]
-            p_cumul = [r for r in p_results if r['category'] == 'cumulative']
-            p_cumul_sum = sum(r['prize'] for r in p_cumul)
-            p_bridge_sum = sum(r['prize'] for r in p_bridge)
-            
-            ph = f'<div style="padding:5px;">'
-            ph += f'<div style="font-weight:800;color:#d9232e;font-size:18px;margin-bottom:4px;">💰 총 시상금: {p_total:,.0f}원</div>'
-            if p_cumul_sum > 0 or p_bridge_sum > 0:
-                parts = []
-                if p_cumul_sum > 0: parts.append(f"누계 {p_cumul_sum:,.0f}")
-                if p_bridge_sum > 0: parts.append(f"브릿지 {p_bridge_sum:,.0f}")
-                ph += f'<div style="color:#888;font-size:13px;margin-bottom:12px;">({" + ".join(parts)})</div>'
-            if p_gugan:
-                ph += '<div style="font-size:12px;color:#4e5968;font-weight:700;margin:8px 0 4px;border-bottom:1px solid #eee;padding-bottom:4px;">📌 시책 진행 현황 (누계에 포함)</div>'
-                for r in p_gugan:
-                    pz = f"{r['prize']:,.0f}원" if r['prize'] > 0 else "0원"
-                    ph += f'<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0;"><span style="color:#888;">{r["name"]}</span><span style="color:#888;font-weight:600;">{pz}</span></div>'
-                    if len(r.get('prize_details', [])) > 1:
-                        for d in r.get('prize_details', []):
-                            ph += f'<div style="display:flex;justify-content:space-between;padding:2px 0 2px 12px;"><span style="color:#aaa;font-size:11px;">· {d["label"]}</span><span style="color:#aaa;font-size:11px;">{d["amount"]:,.0f}원</span></div>'
-            if p_bridge:
-                ph += '<div style="font-size:12px;color:#d4380d;font-weight:700;margin:8px 0 4px;border-bottom:1px solid #eee;padding-bottom:4px;">🌉 브릿지 시상</div>'
-                for r in p_bridge:
-                    pz = f"{r['prize']:,.0f}원" if r['prize'] > 0 else "0원"
-                    if r['type'] == '브릿지2':
-                        ph += f'<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0;"><span style="color:#555;">{r["name"]}<br><span style="font-size:10px;color:#888;">(당월 {int(r.get("curr_req",100000)//10000)}만 가동 시)</span></span><span style="color:#d9232e;font-weight:700;">{pz}</span></div>'
-                        if r.get('shortfall', 0) > 0:
-                            ph += f'<div style="padding:2px 0 2px 8px;font-size:10px;color:#888;">🚀 다음 구간까지 {r["shortfall"]:,.0f}원</div>'
-                    else:
-                        ph += f'<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0;"><span style="color:#555;">{r["name"]}</span><span style="color:#d9232e;font-weight:700;">{pz}</span></div>'
-                        if len(r.get('prize_details', [])) > 1:
-                            for d in r.get('prize_details', []):
-                                ph += f'<div style="display:flex;justify-content:space-between;padding:2px 0 2px 12px;"><span style="color:#aaa;font-size:11px;">· {d["label"]}</span><span style="color:#aaa;font-size:11px;">{d["amount"]:,.0f}원</span></div>'
-            if p_cumul:
-                ph += '<div style="font-size:12px;color:#2B6CB0;font-weight:700;margin:8px 0 4px;border-bottom:1px solid #eee;padding-bottom:4px;">📈 누계 시상</div>'
-                for r in p_cumul:
-                    pz = f"{r['prize']:,.0f}원" if r['prize'] > 0 else "0원"
-                    ph += f'<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0;"><span style="color:#555;">{r["name"]}</span><span style="color:#d9232e;font-weight:700;">{pz}</span></div>'
-                    if len(r.get('prize_details', [])) > 1:
-                        for d in r.get('prize_details', []):
-                            ph += f'<div style="display:flex;justify-content:space-between;padding:2px 0 2px 12px;"><span style="color:#aaa;font-size:11px;">· {d["label"]}</span><span style="color:#aaa;font-size:11px;">{d["amount"]:,.0f}원</span></div>'
-            ph += '</div>'
-            prize_htmls.append(ph)
-        else:
-            prize_htmls.append('')
-    
-    prize_json_bytes = json.dumps(prize_htmls, ensure_ascii=False).encode('utf-8')
-    prize_b64 = _b64.b64encode(prize_json_bytes).decode('ascii')
-    
-    # ══════════════════════════════════════════
-    # 📱 모바일 카드 뷰 생성
-    # ══════════════════════════════════════════
-    html += '<div class="mobile-view">'
-    
-    for row_idx, (_, row) in enumerate(df.iterrows()):
-        name_parts_card = []
-        for c in clip_name_cols:
-            v = str(row[c]) if not pd.isna(row[c]) else ''
-            if v.strip() and v != '0':
-                name_parts_card.append(v.strip())
-        person_card = ' '.join(name_parts_card) if name_parts_card else ''
-        
-        name_val = str(row.get(name_col, '')) if name_col else (person_card or '')
-        num_val = str(row.get('순번', row_idx + 1)) if '순번' in columns else str(row_idx + 1)
-        
-        html += f'<div class="m-card">'
-        
-        summary_items = []
-        for c in data_cols:
-            if '부족금액' in c:
-                v = str(row[c]) if not pd.isna(row[c]) else ''
-                if v and v != '0' and v.strip():
-                    summary_items.append(f'<span class="m-sc">부족 {v}</span>')
-            elif '다음목표' in c:
-                v = str(row[c]) if not pd.isna(row[c]) else ''
-                if v and v.strip():
-                    summary_items.append(f'<span class="m-goal">{v}</span>')
-        summary = ' '.join(summary_items)
-        
-        if prize_data_map and row_idx in prize_data_map:
-            _, p_total = prize_data_map[row_idx]
-            if p_total > 0:
-                p_display = f"{int(p_total)//10000}만" if p_total >= 10000 and p_total % 10000 == 0 else f"{p_total:,.0f}"
-                summary_items.append(f'<span style="background:#fff3e0;color:#d9232e;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700;">💰{p_display}</span>')
-                summary = ' '.join(summary_items)
-        
-        html += f'<div class="m-card-head" onclick="this.parentElement.classList.toggle(\'open\')">'
-        html += f'<span class="m-num">{num_val}</span><span class="m-name">{name_val}</span>'
-        if summary:
-            html += f'<span class="m-summary">{summary}</span>'
-        html += '<span class="m-chevron">&#9660;</span></div>'
-        
-        html += '<div class="m-card-body">'
-        
-        html += f'<div class="m-copy-wrap"><button class="m-copy-btn" onclick="copyClip({row_idx}, this, event)">📋 카톡 보내기</button>'
-        if prize_data_map and row_idx in prize_data_map:
-            html += f'<button class="m-copy-btn" onclick="showPrize({row_idx}, event)" style="background:#fff3e0;color:#d9232e;border:1px solid #ffd4a8;margin-top:4px;">💰 시상금 상세 조회</button>'
-        html += '</div>'
-        
-        for c in clip_name_cols:
-            if c == name_col:
-                continue
-            val = str(row[c]) if not pd.isna(row[c]) else ''
-            if val.strip() and val != '0':
-                html += f'<div class="m-row"><span class="m-label">{c}</span><span class="m-val">{val}</span></div>'
-        
-        current_group = None
-        for c in data_cols:
-            val = str(row[c]) if not pd.isna(row[c]) else ''
-            if not val.strip() or val == '0':
-                continue
-            
-            grp = col_to_grp.get(c)
-            is_goal = any(kw in c for kw in goal_keywords)
-            
-            if grp and grp != current_group:
-                gc = group_color_map.get(grp, '#4e5968')
-                html += f'<div class="m-grp-label" style="border-left:3px solid {gc}; padding-left:8px;">{grp}</div>'
-                current_group = grp
-            elif grp is None and not is_goal and current_group is not None:
-                current_group = None
-            
-            extra_cls = ' m-sc' if c in shortfall_cols else ''
-            html += f'<div class="m-row{extra_cls}"><span class="m-label">{c}</span><span class="m-val">{val}</span></div>'
-        
-        if prize_data_map and row_idx in prize_data_map:
-            p_results, p_total = prize_data_map[row_idx]
-            html += build_prize_card_html(p_results, p_total)
-        
-        html += '</div></div>'
-    
-    html += '</div>'
-    
-    # ── 복사 팝업 오버레이 ──
-    html += """
-    <div id="clip-overlay" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0;
-        background:rgba(0,0,0,0.5); z-index:99999; justify-content:center; align-items:center; padding:20px;"
-        onclick="if(event.target===this){this.style.display='none';}">
-        <div style="background:#fff; border-radius:16px; padding:20px; width:100%;
-            max-width:500px; max-height:70vh; box-shadow:0 10px 40px rgba(0,0,0,0.3);">
-            <h3 style="margin:0 0 10px; font-size:16px;">📋 아래 텍스트를 복사하세요</h3>
-            <textarea id="clip-ta" style="width:100%; height:200px; border:1px solid #ddd; border-radius:8px;
-                padding:10px; font-size:14px; resize:none; font-family:inherit; box-sizing:border-box;"></textarea>
-            <button id="clip-copy-btn" onclick="doCopyOverlay()" style="margin-top:10px; width:100%; padding:12px;
-                border:none; border-radius:10px; font-size:15px; font-weight:700; cursor:pointer;
-                background:#FEE500; color:#3C1E1E;">📋 복사하기</button>
-            <button onclick="document.getElementById('clip-overlay').style.display='none'" style="margin-top:6px;
-                width:100%; padding:12px; border:none; border-radius:10px; font-size:15px; font-weight:700;
-                cursor:pointer; background:#f2f4f6; color:#333;">닫기</button>
-        </div>
+    <div id="kw_{btn_key}" style="margin-top:6px;">
+      <button id="kb_{btn_key}" onclick="doSend_{btn_key}()"
+        style="width:100%;padding:13px 8px;background:#FEE500;color:#3C1E1E;border:none;
+               border-radius:12px;font-size:1.05rem;font-weight:800;cursor:pointer;
+               box-shadow:0 3px 8px rgba(0,0,0,0.1);">
+        💬 {agent_name} 팀장님께 카카오톡 보내기
+      </button>
+      <div id="kd_{btn_key}" style="display:none;text-align:center;padding:8px 0;
+           font-weight:700;color:#2e7d32;font-size:0.95rem;"></div>
     </div>
-    <div id="prize-overlay" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0;
-        background:rgba(0,0,0,0.5); z-index:99999; justify-content:center; align-items:center; padding:20px;"
-        onclick="if(event.target===this){this.style.display='none';}">
-        <div style="background:#fff; border-radius:16px; padding:24px; width:100%;
-            max-width:450px; max-height:70vh; overflow-y:auto; box-shadow:0 10px 40px rgba(0,0,0,0.3);">
-            <h3 style="margin:0 0 12px; font-size:17px;">💰 시상금 상세 조회</h3>
-            <div id="prize-content"></div>
-            <button onclick="document.getElementById('prize-overlay').style.display='none'" style="margin-top:12px;
-                width:100%; padding:12px; border:none; border-radius:10px; font-size:15px; font-weight:700;
-                cursor:pointer; background:#f2f4f6; color:#333;">닫기</button>
-        </div>
-    </div>
-    """
-
-    html += f"""
     <script>
-    var FC_DESKTOP = {freeze_count};
-    var FC = FC_DESKTOP;
-    var clipData = JSON.parse(decodeURIComponent(escape(atob("{clip_b64}"))));
-    var prizeHtml = JSON.parse(decodeURIComponent(escape(atob("{prize_b64}"))));
-    
-    function isMobile() {{ return window.innerWidth <= 768; }}
-    
-    function copyClip(idx, btn, evt) {{
-        evt.stopPropagation();
-        var text = clipData[idx];
-        if (!text) return;
-        if (isMobile() && navigator.share) {{
-            navigator.share({{ text: text }}).then(function() {{
-                showCopied(btn);
-            }}).catch(function() {{
-                fallbackCopy(text, btn);
-            }});
-            return;
-        }}
-        fallbackCopy(text, btn);
-    }}
-    function fallbackCopy(text, btn) {{
-        var ta = document.createElement('textarea');
-        ta.value = text;
-        ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
-        document.body.appendChild(ta);
-        ta.focus();
-        ta.select();
-        ta.setSelectionRange(0, 999999);
-        var ok = false;
-        try {{ ok = document.execCommand('copy'); }} catch(e) {{}}
-        document.body.removeChild(ta);
-        if (ok) {{
-            showCopied(btn);
-            return;
-        }}
-        if (navigator.clipboard && navigator.clipboard.writeText) {{
-            navigator.clipboard.writeText(text).then(function() {{
-                showCopied(btn);
-            }}).catch(function() {{
-                showOverlay(text);
-            }});
-            return;
-        }}
-        showOverlay(text);
-    }}
-    function showOverlay(text) {{
-        var ov = document.getElementById('clip-overlay');
-        var ta = document.getElementById('clip-ta');
-        ta.value = text;
-        ov.style.display = 'flex';
-        setTimeout(function() {{ ta.focus(); ta.select(); ta.setSelectionRange(0, 999999); }}, 100);
-    }}
-    function doCopyOverlay() {{
-        var ta = document.getElementById('clip-ta');
-        var text = ta.value;
-        var tmp = document.createElement('textarea');
-        tmp.value = text;
-        tmp.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
-        document.body.appendChild(tmp);
-        tmp.focus();
-        tmp.select();
-        tmp.setSelectionRange(0, 999999);
-        var ok = false;
-        try {{ ok = document.execCommand('copy'); }} catch(e) {{}}
-        document.body.removeChild(tmp);
-        if (!ok) {{
-            ta.readOnly = false;
-            ta.focus(); ta.select(); ta.setSelectionRange(0, 999999);
-            try {{ ok = document.execCommand('copy'); }} catch(e2) {{}}
-            ta.readOnly = true;
-        }}
-        var btn = document.getElementById('clip-copy-btn');
-        btn.textContent = ok ? '✅ 복사 완료!' : '⚠️ 텍스트를 직접 선택 후 Ctrl+C';
-        btn.style.background = ok ? '#22C55E' : '#f59e0b'; btn.style.color = '#fff';
-        if (ok) {{
-            setTimeout(function() {{
-                document.getElementById('clip-overlay').style.display = 'none';
-                btn.textContent = '📋 복사하기';
-                btn.style.background = '#FEE500'; btn.style.color = '#3C1E1E';
-            }}, 1200);
-        }} else {{
-            ta.readOnly = false;
-            ta.focus(); ta.select(); ta.setSelectionRange(0, 999999);
-        }}
-    }}
-    function showCopied(btn) {{
-        var orig = btn.innerHTML;
-        btn.classList.add('copied');
-        btn.innerHTML = '✅ 복사 완료!';
-        setTimeout(function() {{ btn.classList.remove('copied'); btn.innerHTML = orig; }}, 1500);
-    }}
-    function showPrize(idx, evt) {{
-        if (evt) evt.stopPropagation();
-        var h = prizeHtml[idx];
-        if (!h) {{ alert('시상금 데이터가 없습니다.'); return; }}
-        document.getElementById('prize-content').innerHTML = h;
-        document.getElementById('prize-overlay').style.display = 'flex';
-    }}
-    
-    function applyFreeze() {{
-        var t = document.getElementById("{table_id}");
-        FC = isMobile() ? Math.min(FC_DESKTOP, 2) : FC_DESKTOP;
-        if (!t || FC === 0) return;
-        var fr = t.querySelector("tbody tr");
-        if (!fr) return;
-        var lp = [], cl = 0;
-        for (var i = 0; i < FC; i++) {{ lp.push(cl); if (fr.cells[i]) cl += fr.cells[i].offsetWidth; }}
-        t.querySelectorAll(".col-freeze").forEach(function(c) {{
-            var idx = parseInt(c.getAttribute("data-col"));
-            if (!isNaN(idx) && idx < FC) {{
-                c.style.left = lp[idx] + "px";
-                c.style.position = "sticky";
-                c.style.zIndex = c.tagName === "TH" ? "3" : "1";
-            }} else if (!isNaN(idx) && idx >= FC) {{
-                c.style.position = "static";
-                c.style.boxShadow = "none";
+    function doSend_{btn_key}() {{
+        // 클릭 시점에 parent DOM의 textarea 현재값을 읽음
+        var text = '';
+        try {{
+            var labelKey = '{msg_key}';
+            var parentDoc = window.parent.document;
+            // Streamlit textarea: [data-testid="stTextArea"] 컨테이너 안에
+            // label의 텍스트 내용이 key와 일치하는 textarea를 찾음
+            var containers = parentDoc.querySelectorAll('[data-testid="stTextArea"]');
+            for (var i = 0; i < containers.length; i++) {{
+                var label = containers[i].querySelector('label');
+                var ta    = containers[i].querySelector('textarea');
+                if (ta && label && label.textContent.trim() === labelKey) {{
+                    text = ta.value; break;
+                }}
             }}
-        }});
-    }}
-    function autoResize() {{
-        if (!window.frameElement) return;
-        var vh = window.parent.innerHeight || 900;
-        if (isMobile()) {{
-            var mv = document.querySelector('.mobile-view');
-            if (mv) window.frameElement.style.height = Math.min(mv.scrollHeight + 20, Math.round(vh * 0.80)) + "px";
-        }} else {{
-            var w = document.getElementById("wrap_{table_id}");
-            if (w) window.frameElement.style.height = Math.min(w.scrollHeight + 4, Math.round(vh * 0.85)) + "px";
+            // 못 찾으면 aria-label 또는 id로 fallback
+            if (!text) {{
+                var ta2 = parentDoc.querySelector('textarea[aria-label="' + labelKey + '"]') ||
+                          parentDoc.querySelector('textarea[id*="' + labelKey + '"]');
+                if (ta2) text = ta2.value;
+            }}
+        }} catch(e) {{}}
+        var isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+
+        function showDone(msg) {{
+            document.getElementById('kb_{btn_key}').style.display = 'none';
+            var d = document.getElementById('kd_{btn_key}');
+            d.style.display = 'block';
+            d.innerHTML = msg;
         }}
-    }}
-    window.addEventListener('load', function() {{ applyFreeze(); autoResize(); }});
-    window.addEventListener('resize', function() {{ applyFreeze(); autoResize(); }});
-    var ss = {{}};
-    function sortTable(th) {{
-        var t = document.getElementById("{table_id}");
-        var tb = t.querySelector("tbody");
-        var rows = Array.from(tb.querySelectorAll("tr"));
-        var ci = parseInt(th.getAttribute("data-col"));
-        if (isNaN(ci)) return;
-        var asc = ss[ci] !== true; ss = {{}}; ss[ci] = asc;
-        rows.sort(function(a, b) {{
-            var aT = a.cells[ci].textContent.trim(), bT = b.cells[ci].textContent.trim();
-            var aN = parseFloat(aT.replace(/,/g,"")), bN = parseFloat(bT.replace(/,/g,""));
-            if (aT === "" && bT === "") return 0;
-            if (aT === "") return 1; if (bT === "") return -1;
-            if (!isNaN(aN) && !isNaN(bN)) return asc ? aN - bN : bN - aN;
-            return asc ? aT.localeCompare(bT,'ko') : bT.localeCompare(aT,'ko');
-        }});
-        rows.forEach(function(r) {{ tb.appendChild(r); }});
-        var allRows = tb.querySelectorAll("tr");
-        allRows.forEach(function(r, idx) {{ if (r.cells[0]) r.cells[0].textContent = idx + 1; }});
-        t.querySelectorAll("thead th").forEach(function(h) {{
-            var ar = h.querySelector(".sa"); if (!ar) return;
-            var hi = parseInt(h.getAttribute("data-col"));
-            if (hi === ci) {{ ar.textContent = asc ? "▲" : "▼"; ar.className = "sa active"; }}
-            else {{ ar.textContent = "▲▼"; ar.className = "sa"; }}
-        }});
-        setTimeout(autoResize, 50);
+
+        function copyToClipboard(cb) {{
+            if (navigator.clipboard && window.isSecureContext) {{
+                navigator.clipboard.writeText(text).then(cb).catch(function() {{
+                    legacyCopy(); cb();
+                }});
+            }} else {{ legacyCopy(); cb(); }}
+        }}
+
+        function legacyCopy() {{
+            var ta = document.createElement('textarea');
+            ta.value = text; ta.style.position='fixed'; ta.style.opacity='0';
+            document.body.appendChild(ta); ta.select();
+            document.execCommand('copy'); document.body.removeChild(ta);
+        }}
+
+        if (isMobile) {{
+            // 모바일: Web Share API → 카카오 대상자 선택 화면
+            if (navigator.share) {{
+                navigator.share({{ text: text }})
+                    .then(function() {{ showDone('✅ 공유 완료!'); }})
+                    .catch(function(e) {{
+                        // 취소하거나 실패 시 copy+launch fallback
+                        copyToClipboard(function() {{
+                            showDone('✅ 복사 완료! 카카오톡에서 붙여넣기 하세요.');
+                            setTimeout(function() {{ window.location.href='kakaotalk://launch'; }}, 400);
+                        }});
+                    }});
+            }} else {{
+                // Web Share 미지원 → copy + kakaotalk://launch
+                copyToClipboard(function() {{
+                    showDone('✅ 복사! 카카오톡 실행 중...');
+                    setTimeout(function() {{ window.location.href='kakaotalk://launch'; }}, 400);
+                }});
+            }}
+        }} else {{
+            // 데스크탑: 복사 후 2.5초 뒤 버튼 원복
+            copyToClipboard(function() {{
+                showDone('✅ 복사 완료! 카카오톡 채팅창에 Ctrl+V 하세요.');
+                setTimeout(function() {{
+                    document.getElementById('kd_{btn_key}').style.display = 'none';
+                    document.getElementById('kb_{btn_key}').style.display = 'block';
+                }}, 2500);
+            }});
+        }}
     }}
     </script>
     """
-    return html
+    components.html(html, height=height)
+
 
 # ==========================================
-# 3. 사이드바 (메뉴 선택)
+# 📞 오늘 접촉 대상 페이지
 # ==========================================
-st.sidebar.title("메뉴")
-menu = st.sidebar.radio("이동할 화면을 선택하세요", ["매니저 화면 (로그인)", "관리자 화면 (설정)"])
+def page_contact():
+    st.markdown('<div class="title-band">📞 오늘 접촉 대상</div>', unsafe_allow_html=True)
 
-if st.session_state.get('admin_authenticated', False) and menu == "관리자 화면 (설정)":
-    st.sidebar.divider()
-    with st.sidebar.expander("💾 설정 백업 / 복원"):
-        if os.path.exists(CONFIG_FILE):
-            with open(CONFIG_FILE, 'rb') as f:
-                cfg_bytes = f.read()
-            st.download_button("⬇️ 현재 설정 다운로드", cfg_bytes,
-                             file_name="meritz_config_backup.pkl", mime="application/octet-stream")
-        else:
-            st.caption("저장된 설정이 없습니다.")
-        restore_file = st.file_uploader("⬆️ 백업 파일로 복원", type=['pkl'], key="restore_pkl")
-        if restore_file is not None:
-            if st.button("복원 실행", key="btn_restore"):
-                try:
-                    test = pickle.loads(restore_file.getvalue())
-                    if isinstance(test, dict):
-                        with open(CONFIG_FILE, 'wb') as f:
-                            f.write(restore_file.getvalue())
-                        _reset_session_state()
-                        load_data_and_config()
-                        st.success("✅ 복원 완료!")
-                        st.rerun()
-                    else:
-                        st.error("유효하지 않은 파일입니다.")
-                except Exception as e:
-                    st.error(f"복원 실패: {e}")
-    with st.sidebar.expander("⚠️ 시스템 초기화 (주의)"):
-        st.caption("모든 설정과 데이터가 삭제됩니다.")
-        confirm = st.text_input("'reset' 입력 후 실행", key="reset_confirm")
-        if st.button("🔄 초기화 실행", disabled=(confirm != "reset")):
-            for fp in [CONFIG_FILE, DATA_FILE]:
-                try:
-                    if os.path.exists(fp):
-                        shutil.copy2(fp, fp + ".before_reset")
-                        os.remove(fp)
-                except Exception:
-                    pass
-            _reset_session_state()
-            st.rerun()
+    BRIDGE_COLS = [
+        '브릿지대상_2_3월', '브릿지실적구간_2월', '연속가동대상_2_3월',
+        '브릿지실적_2월', '연속가동실적_2월', '연속가동실적구간_2월',
+        '브릿지실적_3월', '브릿지부족금액_3월'
+    ]
 
-# ==========================================
-# 4. 관리자 화면 (Admin View)
-# ==========================================
-if menu == "관리자 화면 (설정)":
-    st.title("⚙️ 관리자 설정 화면")
-    
-    ADMIN_PASSWORD = "wolf7998"
-    
-    if not st.session_state.get('admin_authenticated', False):
-        with st.form("admin_login_form"):
-            admin_pw = st.text_input("🔒 관리자 비밀번호를 입력하세요", type="password")
-            submit_pw = st.form_submit_button("로그인")
-            if submit_pw:
-                if admin_pw == ADMIN_PASSWORD:
-                    st.session_state['admin_authenticated'] = True
-                    st.rerun()
-                else:
-                    st.error("❌ 비밀번호가 일치하지 않습니다.")
-        st.stop()
-    
-    st.header("1. 데이터 파일 업로드 및 관리")
-    if has_data():
-        st.success(f"✅ 현재 **{len(st.session_state['df_merged'])}행**의 데이터가 운영 중입니다. 새 파일을 업로드하면 데이터만 교체됩니다 (설정 유지).")
-    
-    st.caption("📌 2~3개 파일을 업로드하여 설계사 코드 기준으로 합집합(outer merge)합니다. 세 번째 파일은 선택사항입니다.")
-    col_file1, col_file2, col_file3 = st.columns(3)
-    with col_file1: file1 = st.file_uploader("📁 첫 번째 파일", type=['csv', 'xlsx'], key="file1_upload")
-    with col_file2: file2 = st.file_uploader("📁 두 번째 파일", type=['csv', 'xlsx'], key="file2_upload")
-    with col_file3: file3 = st.file_uploader("📁 세 번째 파일 (선택)", type=['csv', 'xlsx'], key="file3_upload")
-        
-    if file1 is not None and file2 is not None:
-        try:
-            with st.spinner("파일을 읽고 있습니다..."):
-                df1 = load_file_data(file1.getvalue(), file1.name)
-                df2 = load_file_data(file2.getvalue(), file2.name)
-                df3 = load_file_data(file3.getvalue(), file3.name) if file3 is not None else None
-            cols1 = df1.columns.tolist()
-            cols2 = df2.columns.tolist()
-            cols3 = df3.columns.tolist() if df3 is not None else []
-            
-            prev_key1 = st.session_state.get('merge_key1_col', '')
-            prev_key2 = st.session_state.get('merge_key2_col', '')
-            prev_key3 = st.session_state.get('merge_key3_col', '')
-            idx1 = cols1.index(prev_key1) if prev_key1 in cols1 else 0
-            idx2 = cols2.index(prev_key2) if prev_key2 in cols2 else 0
-            idx3 = cols3.index(prev_key3) if (cols3 and prev_key3 in cols3) else 0
-            
-            with st.form("merge_form"):
-                col_key1, col_key2 = st.columns(2)
-                with col_key1: key1 = st.selectbox("파일1의 [설계사 코드] 열", cols1, index=idx1)
-                with col_key2: key2 = st.selectbox("파일2의 [설계사 코드] 열", cols2, index=idx2)
-                
-                if df3 is not None:
-                    key3 = st.selectbox("파일3의 [설계사 코드] 열", cols3, index=idx3)
-                else:
-                    key3 = None
-                
-                submit_merge = st.form_submit_button("🔄 데이터 병합 및 교체 (설정 유지)")
-                if submit_merge:
-                    with st.spinner("데이터를 병합하고 저장 중입니다..."):
-                        file_dates = []
-                        all_files = [file1, file2] + ([file3] if file3 is not None else [])
-                        for f_obj in all_files:
-                            if f_obj.name.endswith('.xlsx'):
-                                try:
-                                    import openpyxl
-                                    wb = openpyxl.load_workbook(io.BytesIO(f_obj.getvalue()), read_only=True)
-                                    d = wb.properties.modified or wb.properties.created
-                                    if d: file_dates.append(d)
-                                    wb.close()
-                                except Exception:
-                                    pass
-                        if file_dates:
-                            st.session_state['data_date'] = max(file_dates).strftime("%Y.%m.%d")
-                        else:
-                            st.session_state['data_date'] = datetime.now().strftime("%Y.%m.%d")
-                        
-                        # ── 1단계: 파일1 + 파일2 outer merge ──
-                        df1['merge_key1'] = df1[key1].apply(clean_key)
-                        df2['merge_key2'] = df2[key2].apply(clean_key)
-                        df_merged = pd.merge(df1, df2, left_on='merge_key1', right_on='merge_key2', how='outer', suffixes=('_파일1', '_파일2'))
-                        
-                        # 중복 열 통합 (파일1+파일2)
-                        cols_1 = [c for c in df_merged.columns if c.endswith('_파일1')]
-                        for c1 in cols_1:
-                            base = c1.replace('_파일1', '')
-                            c2 = base + '_파일2'
-                            if c2 in df_merged.columns:
-                                df_merged[base] = df_merged[c1].combine_first(df_merged[c2])
-                                df_merged.drop(columns=[c1, c2], inplace=True)
-                        
-                        # 통합 검색 키 (파일1+파일2)
-                        df_merged['_unified_search_key'] = df_merged['merge_key1'].combine_first(df_merged['merge_key2'])
-                        
-                        # ── 2단계: 파일3이 있으면 추가 outer merge ──
-                        if df3 is not None and key3 is not None:
-                            df3['merge_key3'] = df3[key3].apply(clean_key)
-                            df_merged = pd.merge(df_merged, df3, left_on='_unified_search_key', right_on='merge_key3', how='outer', suffixes=('', '_파일3'))
-                            
-                            # 중복 열 통합 (기존 + 파일3)
-                            cols_3 = [c for c in df_merged.columns if c.endswith('_파일3')]
-                            for c3 in cols_3:
-                                base = c3.replace('_파일3', '')
-                                if base in df_merged.columns:
-                                    df_merged[base] = df_merged[base].combine_first(df_merged[c3])
-                                    df_merged.drop(columns=[c3], inplace=True)
-                                else:
-                                    df_merged.rename(columns={c3: base}, inplace=True)
-                            
-                            # 통합 검색 키 업데이트 (파일3 포함)
-                            if 'merge_key3' in df_merged.columns:
-                                df_merged['_unified_search_key'] = df_merged['_unified_search_key'].combine_first(df_merged['merge_key3'])
-                            
-                            st.session_state['merge_key3_col'] = key3
-                        else:
-                            st.session_state['merge_key3_col'] = ''
-                        
-                        st.session_state['merge_key1_col'] = key1
-                        st.session_state['merge_key2_col'] = key2
-                        st.session_state['df_merged'] = df_merged
-                        
-                        new_cols = [c for c in df_merged.columns if c not in ['merge_key1', 'merge_key2', 'merge_key3']]
-                        
-                        if st.session_state['manager_col'] not in new_cols:
-                            st.session_state['manager_col'] = ""
-                        if st.session_state.get('manager_col2', '') and st.session_state['manager_col2'] not in new_cols:
-                            st.session_state['manager_col2'] = ""
-                        if st.session_state['manager_name_col'] not in new_cols:
-                            st.session_state['manager_name_col'] = ""
-                        
-                        valid_admin_cols = []
-                        for item in st.session_state['admin_cols']:
-                            if item['col'] in new_cols:
-                                if item.get('fallback_col') and item['fallback_col'] not in new_cols:
-                                    item['fallback_col'] = ''
-                                valid_admin_cols.append(item)
-                        st.session_state['admin_cols'] = valid_admin_cols
-                        
-                        goals = st.session_state.get('admin_goals', [])
-                        if isinstance(goals, dict):
-                            goals = [{"target_col": k, "ref_col": "", "tiers": v} for k, v in goals.items()]
-                        valid_goals = []
-                        for goal in goals:
-                            if goal['target_col'] in new_cols:
-                                if goal.get('ref_col') and goal['ref_col'] not in new_cols:
-                                    goal['ref_col'] = ''
-                                valid_goals.append(goal)
-                        st.session_state['admin_goals'] = valid_goals
-                        
-                        valid_cats = []
-                        for cat in st.session_state['admin_categories']:
-                            cond_list = cat.get('conditions', [])
-                            if all(c.get('col', '') in new_cols for c in cond_list):
-                                valid_cats.append(cat)
-                        st.session_state['admin_categories'] = valid_cats
-                        
-                        save_data()
-                        save_config()
-                        
-                        file_count = 3 if df3 is not None else 2
-                        st.success(f"✅ {file_count}개 파일 병합 완료! 총 {len(df_merged)}행 | 기존 설정이 유지되었습니다.")
-                        st.rerun()
-        except Exception as e:
-            st.error(f"파일을 읽는 중 오류가 발생했습니다: {e}")
+    # ── 브릿지 파일 탐색 ─────────────────────────────────────
+    bridge_df     = None
+    mgr_code_col  = None
+    agent_name_col= None
+    agency_col    = None
+    mgr_name_col  = None
 
-    st.divider()
-    
-    if has_data():
-        warnings = []
-        if not st.session_state['manager_col']:
-            warnings.append("⚠️ **매니저 코드 열**이 설정되지 않았습니다. 아래 3번에서 다시 선택해주세요.")
-        if not st.session_state['manager_name_col']:
-            warnings.append("⚠️ **매니저 이름 열**이 설정되지 않았습니다. 아래 3번에서 다시 선택해주세요.")
-        for w in warnings:
-            st.warning(w)
-        df = st.session_state['df_merged']
-        available_columns = [c for c in df.columns if c not in ['merge_key1', 'merge_key2', 'merge_key3', '_unified_search_key']]
-        
-        st.header("2. 📅 기준일 및 카톡 복사 문구 설정")
-        with st.form("date_footer_form"):
-            current_date = st.session_state.get('data_date', '')
-            new_date = st.text_input("데이터 기준일 (예: 2026.02.24)", value=current_date)
-            
-            default_footer = "팀장님! 시상 부족금액 안내드려요!\n부족한 거 챙겨서 꼭 시상 많이 받아 가셨으면 좋겠습니다!\n좋은 하루 되세요!"
-            current_footer = st.session_state.get('clip_footer', '') or default_footer
-            new_footer = st.text_area("카톡 하단 인사말 (줄바꿈 가능)", value=current_footer, height=100)
-            
-            if st.form_submit_button("저장"):
-                st.session_state['data_date'] = new_date
-                st.session_state['clip_footer'] = new_footer
-                save_data_and_config()
-                st.rerun()
-        
-        st.header("3. 매니저 로그인 및 이름 표시 열 설정")
-        st.caption("두 파일의 매니저 코드 열 이름이 다른 경우, 보조 열을 추가 선택하면 양쪽 모두 검색됩니다.")
-        col_m1, col_m2 = st.columns(2)
-        with col_m1:
-            manager_col = st.selectbox("🔑 로그인 [매니저 코드] 열 (파일1)", available_columns, 
-                                       index=available_columns.index(st.session_state['manager_col']) if st.session_state['manager_col'] in available_columns else 0)
-        with col_m2:
-            manager_col2_options = ["(없음 - 단일 열 사용)"] + available_columns
-            prev_col2 = st.session_state.get('manager_col2', '')
-            idx_col2 = manager_col2_options.index(prev_col2) if prev_col2 in manager_col2_options else 0
-            manager_col2 = st.selectbox("🔑 보조 [매니저 코드] 열 (파일2/3, 열 이름이 다를 때)", manager_col2_options, index=idx_col2)
-        
-        col_m3, col_m4 = st.columns([8, 2])
-        with col_m3:
-            idx_name = available_columns.index(st.session_state['manager_name_col']) if st.session_state['manager_name_col'] in available_columns else 0
-            manager_name_col = st.selectbox("👤 화면 상단 [매니저 이름] 표시 열", available_columns, index=idx_name)
-        with col_m4:
-            st.write(""); st.write("")
-            if st.button("저장", key="btn_save_manager"):
-                st.session_state['manager_col'] = manager_col
-                st.session_state['manager_col2'] = manager_col2 if manager_col2 != "(없음 - 단일 열 사용)" else ""
-                st.session_state['manager_name_col'] = manager_name_col
-                save_data_and_config()
-                st.success("로그인 및 이름 열 설정이 저장되었습니다.")
+    for cfg in st.session_state.get('config', []):
+        if not mgr_code_col:   mgr_code_col   = cfg.get('col_manager_code','') or cfg.get('col_manager','')
+        if not agent_name_col: agent_name_col = cfg.get('col_name','')
+        if not agency_col:     agency_col     = cfg.get('col_agency','') or cfg.get('col_branch','')
 
-        st.divider()
+    best_score = 0
+    for fname, df in st.session_state['raw_data'].items():
+        score = sum(1 for c in BRIDGE_COLS if c in df.columns)
+        if score > best_score:
+            best_score = score
+            bridge_df  = df
+            for col in df.columns:
+                if not mgr_code_col   and any(k in col for k in ('매니저코드','지원매니저코드','매니저_코드')): mgr_code_col   = col
+                if not mgr_name_col   and any(k in col for k in ('매니저명','지원매니저명','담당매니저명')):     mgr_name_col   = col
+                if not agent_name_col and any(k in col for k in ('성명','이름','설계사명')):                    agent_name_col = col
+                if not agency_col     and any(k in col for k in ('대리점명','소속','지사명')):                  agency_col     = col
 
-        st.header("4. 표시할 데이터 항목 및 필터 추가")
-        c1, c2, c3 = st.columns([3, 3, 3])
-        with c1: sel_col = st.selectbox("항목 선택 (주 열)", available_columns, key="sec3_col")
-        with c2: 
-            fallback_options = ["(없음)"] + available_columns
-            fallback_col = st.selectbox("대체 열 (주 열에 값이 없을 때)", fallback_options, key="sec3_fallback")
-        with c3: display_name = st.text_input("표시 명칭 (선택)", placeholder="미입력시 원본유지", key="sec3_disp")
-        
-        c4, c5, c6 = st.columns([3, 3, 1])
-        with c4: col_type = st.radio("데이터 타입", ["텍스트", "숫자"], horizontal=True, key="sec3_type")
-        with c5: condition = st.text_input("산식 (예: >= 500,000)", key="sec3_cond")
-        with c6:
-            st.write(""); st.write("")
-            if st.button("➕ 추가", key="btn_add_col"):
-                final_display_name = display_name.strip() if display_name.strip() else sel_col
-                fb = fallback_col if fallback_col != "(없음)" else ""
-                st.session_state['admin_cols'].append({
-                    "col": sel_col, "fallback_col": fb, "display_name": final_display_name, "type": col_type, "condition": condition if col_type == "숫자" else ""
-                })
-                save_data_and_config()
-                st.rerun()
+    if bridge_df is None or best_score == 0:
+        st.warning("⚠️ 브릿지 데이터 파일을 찾을 수 없습니다. 관리자 화면에서 업로드해주세요.")
+        st.info(f"필요 컬럼: {', '.join(BRIDGE_COLS)}")
+        return
 
-        if st.session_state['admin_cols']:
-            for i, item in enumerate(st.session_state['admin_cols']):
-                row_c1, row_c2 = st.columns([8, 2])
-                with row_c1:
-                    disp = item.get('display_name', item['col'])
-                    fb_text = f" (대체: `{item['fallback_col']}`)" if item.get('fallback_col') else ""
-                    st.markdown(f"- 📄 원본: `{item['col']}`{fb_text} | **화면 표시: [{disp}]** ({item['type']}) | 조건: `{item['condition']}`")
-                with row_c2:
-                    if st.button("❌ 삭제", key=f"del_col_{i}"):
-                        st.session_state['admin_cols'].pop(i)
-                        save_data_and_config()
-                        st.rerun()
+    missing_cols = [c for c in BRIDGE_COLS if c not in bridge_df.columns]
+    if missing_cols:
+        st.warning(f"⚠️ 일부 컬럼 없음: {', '.join(missing_cols)}")
 
-        st.divider()
+    # ── 로그인 ────────────────────────────────────────────────
+    if 'contact_logged_in' not in st.session_state:
+        st.session_state.contact_logged_in = False
 
-        st.header("5. 목표 구간 설정 (기준열 연동 가능)")
-        st.caption("기준 열(A)을 설정하면, A값이 B 목표의 상한선이 됩니다. (예: A=40만이면 B의 최대 목표도 40만)")
-        c1, c2 = st.columns(2)
-        with c1: 
-            goal_target = st.selectbox("목표를 적용할 항목 (B열)", available_columns, key="sec4_target")
-        with c2:
-            goal_ref_options = ["(없음 - 고정 구간)"] + available_columns
-            goal_ref = st.selectbox("기준 열 (A열) — B의 최소 목표 기준", goal_ref_options, key="sec4_ref")
-        c3, c4 = st.columns([7, 1])
-        with c3: goal_tiers = st.text_input("구간 금액 입력 (예: 200000, 400000, 600000)", key="sec4_tiers")
-        with c4:
-            st.write(""); st.write("")
-            if st.button("➕ 추가", key="btn_add_goal"):
-                if goal_tiers:
-                    tiers_list = [float(x.strip()) for x in goal_tiers.split(",") if x.strip().replace('.','',1).isdigit()]
-                    if tiers_list:
-                        ref = goal_ref if goal_ref != "(없음 - 고정 구간)" else ""
-                        goals = st.session_state.get('admin_goals', [])
-                        if isinstance(goals, dict):
-                            goals = [{"target_col": k, "ref_col": "", "tiers": v} for k, v in goals.items()]
-                        goals.append({"target_col": goal_target, "ref_col": ref, "tiers": sorted(tiers_list)})
-                        st.session_state['admin_goals'] = goals
-                        save_data_and_config()
-                        st.rerun()
-                
-        goals = st.session_state.get('admin_goals', [])
-        if isinstance(goals, dict):
-            goals = [{"target_col": k, "ref_col": "", "tiers": v} for k, v in goals.items()]
-            st.session_state['admin_goals'] = goals
-            save_data_and_config()
-        
-        if goals:
-            for i, goal in enumerate(goals):
-                row_c1, row_c2 = st.columns([8, 2])
-                with row_c1:
-                    ref_text = f" (상한: **{goal['ref_col']}** 값까지)" if goal.get('ref_col') else " (고정 구간)"
-                    tiers_display = [f"{int(t)//10000}만" if t % 10000 == 0 else f"{t:,.0f}" for t in goal['tiers']]
-                    st.markdown(f"- **{goal['target_col']}** | 구간: {', '.join(tiers_display)}{ref_text}")
-                with row_c2:
-                    if st.button("❌ 삭제", key=f"del_goal_{i}"):
-                        goals.pop(i)
-                        st.session_state['admin_goals'] = goals
-                        save_data_and_config()
-                        st.rerun()
-
-        st.divider()
-
-        st.header("6. 맞춤형 분류(태그) 설정 (3개 조건 조합)")
-        with st.form("add_cat_form"):
-            col1, col2 = st.columns(2)
-            with col1:
-                cat_col1 = st.selectbox("1. 기준 열 선택", available_columns)
-                cat_col2 = st.selectbox("2. 기준 열 선택", ["(선택안함)"] + available_columns)
-                cat_col3 = st.selectbox("3. 기준 열 선택", ["(선택안함)"] + available_columns)
-            with col2:
-                cat_cond1 = st.text_input("1. 산식 (예: >= 500000, 텍스트는 == '정상')")
-                cat_cond2 = st.text_input("2. 산식 (예: > 0, 없으면 비워둠)")
-                cat_cond3 = st.text_input("3. 산식 (예: <= 100, 없으면 비워둠)")
-            cat_name = st.text_input("부여할 분류명 (예: VIP설계사)")
-            submit_cat = st.form_submit_button("➕ 기준 추가")
-            
-            if submit_cat:
-                conditions = []
-                if cat_cond1.strip() and cat_cond1.strip() != '상관없음': conditions.append({"col": cat_col1, "cond": cat_cond1.strip()})
-                if cat_col2 != "(선택안함)" and cat_cond2.strip() and cat_cond2.strip() != '상관없음': conditions.append({"col": cat_col2, "cond": cat_cond2.strip()})
-                if cat_col3 != "(선택안함)" and cat_cond3.strip() and cat_cond3.strip() != '상관없음': conditions.append({"col": cat_col3, "cond": cat_cond3.strip()})
-                if conditions and cat_name.strip():
-                    st.session_state['admin_categories'].append({"conditions": conditions, "name": cat_name.strip()})
-                    save_data_and_config()
-                    st.rerun()
-            
-        if st.session_state['admin_categories']:
-            for i, cat in enumerate(st.session_state['admin_categories']):
-                row_c1, row_c2 = st.columns([8, 2])
-                with row_c1:
-                    cond_strs = [f"`{c['col']}` {c['cond']}" for c in cat.get('conditions', [{'col': cat.get('col'), 'cond': cat.get('condition')}])]
-                    st.markdown(f"- 조건: **{' AND '.join(cond_strs)}** | **[{cat['name']}]** 태그 부여")
-                with row_c2:
-                    if st.button("❌ 삭제", key=f"del_cat_{i}"):
-                        st.session_state['admin_categories'].pop(i)
-                        save_data_and_config()
-                        st.rerun()
-
-        st.divider()
-
-        st.header("7. 📋 화면 표시 순서 커스텀 설정")
-        expected_cols = []
-        if st.session_state['admin_categories']: expected_cols.append("맞춤분류")
-        for item in st.session_state['admin_cols']: expected_cols.append(item.get('display_name', item['col']))
-        for goal in (st.session_state['admin_goals'] if isinstance(st.session_state['admin_goals'], list) else []): 
-            expected_cols.extend([f"{goal['target_col']} 다음목표", f"{goal['target_col']} 부족금액"])
-            
-        current_order = st.session_state.get('col_order', [])
-        valid_order = [c for c in current_order if c in expected_cols]
-        for c in expected_cols:
-            if c not in valid_order:
-                valid_order.append(c)
-                
-        if st.session_state.get('col_order', []) != valid_order:
-            st.session_state['col_order'] = valid_order
-
-        if st.session_state['col_order']:
-            st.write("---")
-            for i, col_name in enumerate(st.session_state['col_order']):
-                c1, c2, c3 = st.columns([8, 1, 1])
-                with c1: st.markdown(f"**{i+1}.** {col_name}")
-                with c2:
-                    if st.button("🔼", key=f"up_{i}", disabled=(i == 0)):
-                        st.session_state['col_order'][i], st.session_state['col_order'][i-1] = st.session_state['col_order'][i-1], st.session_state['col_order'][i]
-                        save_data_and_config()
-                        st.rerun()
-                with c3:
-                    if st.button("🔽", key=f"down_{i}", disabled=(i == len(st.session_state['col_order']) - 1)):
-                        st.session_state['col_order'][i], st.session_state['col_order'][i+1] = st.session_state['col_order'][i+1], st.session_state['col_order'][i]
-                        save_data_and_config()
-                        st.rerun()
-            st.write("---")
-
-        st.divider()
-
-        st.header("8. 📊 항목 그룹 헤더 설정")
-        st.caption("여러 항목을 묶어서 상단에 그룹명을 표시합니다. (예: A, B, C 항목을 '2~3월 시책 현황')")
-        
-        col_order = st.session_state.get('col_order', [])
-        if col_order:
-            with st.form("add_group_form"):
-                g_name = st.text_input("그룹 헤더명 (예: 2~3월 시책 현황)")
-                g_cols = st.multiselect("묶을 항목 선택 (표시 순서 기준)", col_order)
-                submit_group = st.form_submit_button("➕ 그룹 추가")
-                if submit_group and g_name.strip() and g_cols:
-                    groups = st.session_state.get('col_groups', [])
-                    groups.append({"name": g_name.strip(), "cols": g_cols})
-                    st.session_state['col_groups'] = groups
-                    save_data_and_config()
-                    st.rerun()
-            
-            if st.session_state.get('col_groups'):
-                for i, grp in enumerate(st.session_state['col_groups']):
-                    row_c1, row_c2 = st.columns([8, 2])
-                    with row_c1:
-                        st.markdown(f"- **[{grp['name']}]** : {', '.join(grp['cols'])}")
-                    with row_c2:
-                        if st.button("❌ 삭제", key=f"del_grp_{i}"):
-                            st.session_state['col_groups'].pop(i)
-                            save_data_and_config()
-                            st.rerun()
-        else:
-            st.info("먼저 7번에서 표시 순서를 설정해주세요.")
-        
-        st.divider()
-        st.header("9. 💰 시상금 설정")
-        st.caption("시상금 시책을 설정합니다. 실적과 시상금을 파일에서 직접 읽어옵니다. 매니저 화면의 📋 카톡에 시상금이 포함되고 💰 버튼이 표시됩니다.")
-        
-        prize_cfgs = st.session_state.get('prize_config', [])
-        
-        st.markdown("**📌 주차/브릿지 시상**")
-        if st.button("➕ 주차/브릿지 시상 추가", key="add_prize_weekly"):
-            prize_cfgs.append({
-                "name": f"신규 시책 {len(prize_cfgs)+1}", "category": "weekly",
-                "type": "구간 시책", "col_code": "", "col_val": "",
-                "col_val_prev": "", "col_val_curr": "",
-                "prize_items": [{"label": "시상금", "col_eligible": "", "col_prize": ""}],
-                "curr_req": 100000.0,
-                "tiers": [(500000, 300), (300000, 200), (200000, 200), (100000, 100)]
-            })
-            st.session_state['prize_config'] = prize_cfgs
-            save_data_and_config()
-            st.rerun()
-        
-        weekly_prizes = [(i, c) for i, c in enumerate(prize_cfgs) if c.get('category', 'weekly') == 'weekly']
-        for idx, cfg in weekly_prizes:
-            with st.expander(f"📌 {cfg.get('name', '시책')} ({cfg.get('type', '구간')})", expanded=False):
-                c1, c2 = st.columns([8, 2])
-                with c2:
-                    if st.button("🗑️ 삭제", key=f"del_prize_{idx}"):
-                        prize_cfgs.pop(idx)
-                        st.session_state['prize_config'] = prize_cfgs
-                        save_data_and_config()
-                        st.rerun()
-                
-                cfg['name'] = st.text_input("시책명", value=cfg.get('name', ''), key=f"pname_{idx}")
-                
-                type_idx = 0
-                if "1기간" in cfg.get('type', ''): type_idx = 1
-                elif "2기간" in cfg.get('type', ''): type_idx = 2
-                cfg['type'] = st.radio("시책 종류", 
-                    ["구간 시책", "브릿지 시책 (1기간: 시상 확정)", "브릿지 시책 (2기간: 당월 달성 조건)"],
-                    index=type_idx, horizontal=True, key=f"ptype_{idx}")
-                
-                cols = available_columns
-                def _gi(v, opts): return opts.index(v) if v in opts else 0
-                
-                cfg['col_code'] = st.selectbox("설계사코드(사번) 열", cols, index=_gi(cfg.get('col_code',''), cols), key=f"pccode_{idx}")
-                
-                if "1기간" in cfg['type']:
-                    c1, c2 = st.columns(2)
-                    with c1: cfg['col_val_prev'] = st.selectbox("전월 실적 열", cols, index=_gi(cfg.get('col_val_prev',''), cols), key=f"pprev_{idx}")
-                    with c2: cfg['col_val_curr'] = st.selectbox("당월 실적 열", cols, index=_gi(cfg.get('col_val_curr',''), cols), key=f"pcurr_{idx}")
-                elif "2기간" in cfg['type']:
-                    cfg['col_val_curr'] = st.selectbox("당월 실적 열", cols, index=_gi(cfg.get('col_val_curr',''), cols), key=f"pcurr2_{idx}")
-                else:
-                    cfg['col_val'] = st.selectbox("실적 수치 열", cols, index=_gi(cfg.get('col_val',''), cols), key=f"pval_{idx}")
-                
-                if "2기간" in cfg['type']:
-                    cfg['curr_req'] = st.number_input("당월 필수 달성 금액 (합산용)", value=float(cfg.get('curr_req', 100000.0)), step=10000.0, key=f"creq2_{idx}")
-                    st.write("📈 구간 설정 (달성금액, 지급률%)")
-                    tier_str = "\n".join([f"{int(t[0])},{int(t[1])}" for t in cfg.get('tiers', [])])
-                    tier_input = st.text_area("엔터로 줄바꿈", value=tier_str, height=120, key=f"tier_{idx}")
-                    try:
-                        new_tiers = []
-                        for line in tier_input.strip().split('\n'):
-                            if ',' in line:
-                                parts = line.split(',')
-                                new_tiers.append((float(parts[0].strip()), float(parts[1].strip())))
-                        cfg['tiers'] = sorted(new_tiers, key=lambda x: x[0], reverse=True)
-                    except:
-                        st.error("형식이 올바르지 않습니다.")
-                    st.caption("💡 브릿지 2기간: (확보구간 + 당월가동금액) × 지급률")
-                else:
-                    st.markdown("**💰 시상금 항목 (여러 개 가능)**")
-                    st.caption("지급률 컬럼: 0이면 미대상(미표시). 공란이면 무조건 대상 처리.")
-                    if 'prize_items' not in cfg:
-                        old_col = cfg.pop('col_prize', '') or cfg.pop('col', '')
-                        cfg['prize_items'] = [{"label": "시상금", "col_eligible": "", "col_prize": old_col}] if old_col else [{"label": "시상금", "col_eligible": "", "col_prize": ""}]
-                    for _pi in cfg.get('prize_items', []):
-                        if 'col' in _pi and 'col_prize' not in _pi:
-                            _pi['col_prize'] = _pi.pop('col', '')
-                        if 'col_eligible' not in _pi:
-                            _pi['col_eligible'] = ''
-                    
-                    cols_with_blank = ["(공란)"] + cols
-                    updated_items = []
-                    for pi_idx, pi in enumerate(cfg.get('prize_items', [])):
-                        st.markdown(f"<div style='background:#f8f9fa;padding:6px 8px;border-radius:6px;margin:4px 0;'>", unsafe_allow_html=True)
-                        pc1, pc4 = st.columns([8, 2])
-                        with pc1:
-                            pi['label'] = st.text_input("시상명", value=pi.get('label', ''), key=f"wpilbl_{idx}_{pi_idx}", placeholder="시상 항목명")
-                        with pc4:
-                            if st.button("🗑️", key=f"wpidel_{idx}_{pi_idx}", use_container_width=True):
-                                st.markdown("</div>", unsafe_allow_html=True)
-                                continue
-                        pc2, pc3 = st.columns(2)
-                        with pc2:
-                            cur_elig = pi.get('col_eligible', '')
-                            elig_idx = cols_with_blank.index(cur_elig) if cur_elig in cols_with_blank else 0
-                            sel_elig = st.selectbox("지급률 컬럼 (0=미대상)", cols_with_blank, index=elig_idx, key=f"wpielig_{idx}_{pi_idx}")
-                            pi['col_eligible'] = sel_elig if sel_elig != "(공란)" else ""
-                        with pc3:
-                            cur_prize = pi.get('col_prize', '')
-                            prize_idx = cols_with_blank.index(cur_prize) if cur_prize in cols_with_blank else 0
-                            sel_prize = st.selectbox("예정시상금 컬럼", cols_with_blank, index=prize_idx, key=f"wpiprz_{idx}_{pi_idx}")
-                            pi['col_prize'] = sel_prize if sel_prize != "(공란)" else ""
-                        st.markdown("</div>", unsafe_allow_html=True)
-                        updated_items.append(pi)
-                    cfg['prize_items'] = updated_items
-                    
-                    if st.button("➕ 시상금 항목 추가", key=f"wpiadd_{idx}", use_container_width=True):
-                        cfg['prize_items'].append({"label": f"시상금{len(cfg['prize_items'])+1}", "col_eligible": "", "col_prize": ""})
-                        st.rerun()
-                
-                if st.button("💾 이 시책 저장", key=f"psave_{idx}"):
-                    st.session_state['prize_config'] = prize_cfgs
-                    save_data_and_config()
-                    st.success(f"'{cfg['name']}' 저장됨")
-        
-        st.markdown("---")
-        
-        st.markdown("**📈 월간 누계 시상**")
-        if st.button("➕ 누계 시상 추가", key="add_prize_cumul"):
-            prize_cfgs.append({
-                "name": f"신규 누계 {len(prize_cfgs)+1}", "category": "cumulative",
-                "type": "누계", "col_code": "", "col_val": "",
-                "prize_items": [{"label": "시상금", "col_eligible": "", "col_prize": ""}]
-            })
-            st.session_state['prize_config'] = prize_cfgs
-            save_data_and_config()
-            st.rerun()
-        
-        cumul_prizes = [(i, c) for i, c in enumerate(prize_cfgs) if c.get('category') == 'cumulative']
-        for idx, cfg in cumul_prizes:
-            with st.expander(f"📈 {cfg.get('name', '누계')}", expanded=False):
-                c1, c2 = st.columns([8, 2])
-                with c2:
-                    if st.button("🗑️ 삭제", key=f"del_prize_{idx}"):
-                        prize_cfgs.pop(idx)
-                        st.session_state['prize_config'] = prize_cfgs
-                        save_data_and_config()
-                        st.rerun()
-                
-                cols = available_columns
-                def _gi(v, opts): return opts.index(v) if v in opts else 0
-                
-                cfg['name'] = st.text_input("누계 항목명", value=cfg.get('name', ''), key=f"pname_{idx}")
-                cfg['col_code'] = st.selectbox("설계사코드(사번) 열", cols, index=_gi(cfg.get('col_code',''), cols), key=f"pccode_{idx}")
-                cfg['col_val'] = st.selectbox("누계 실적 열", cols, index=_gi(cfg.get('col_val',''), cols), key=f"pval_{idx}")
-                
-                st.markdown("**💰 시상금 항목 (여러 개 가능)**")
-                st.caption("지급률 컬럼: 0이면 미대상(미표시). 공란이면 무조건 대상 처리.")
-                if 'prize_items' not in cfg:
-                    old_col = cfg.pop('col_prize', '')
-                    cfg['prize_items'] = [{"label": "시상금", "col_eligible": "", "col_prize": old_col}] if old_col else [{"label": "시상금", "col_eligible": "", "col_prize": ""}]
-                for _pi in cfg.get('prize_items', []):
-                    if 'col' in _pi and 'col_prize' not in _pi:
-                        _pi['col_prize'] = _pi.pop('col', '')
-                    if 'col_eligible' not in _pi:
-                        _pi['col_eligible'] = ''
-                
-                cols_with_blank = ["(공란)"] + cols
-                updated_items = []
-                for pi_idx, pi in enumerate(cfg.get('prize_items', [])):
-                    st.markdown(f"<div style='background:#f0f4ff;padding:6px 8px;border-radius:6px;margin:4px 0;'>", unsafe_allow_html=True)
-                    pc1, pc4 = st.columns([8, 2])
-                    with pc1:
-                        pi['label'] = st.text_input("시상명", value=pi.get('label', ''), key=f"cpilbl_{idx}_{pi_idx}", placeholder="시상 항목명")
-                    with pc4:
-                        if st.button("🗑️", key=f"cpidel_{idx}_{pi_idx}", use_container_width=True):
-                            st.markdown("</div>", unsafe_allow_html=True)
-                            continue
-                    pc2, pc3 = st.columns(2)
-                    with pc2:
-                        cur_elig = pi.get('col_eligible', '')
-                        elig_idx = cols_with_blank.index(cur_elig) if cur_elig in cols_with_blank else 0
-                        sel_elig = st.selectbox("지급률 컬럼 (0=미대상)", cols_with_blank, index=elig_idx, key=f"cpielig_{idx}_{pi_idx}")
-                        pi['col_eligible'] = sel_elig if sel_elig != "(공란)" else ""
-                    with pc3:
-                        cur_prize = pi.get('col_prize', '')
-                        prize_idx = cols_with_blank.index(cur_prize) if cur_prize in cols_with_blank else 0
-                        sel_prize = st.selectbox("예정시상금 컬럼", cols_with_blank, index=prize_idx, key=f"cpiprz_{idx}_{pi_idx}")
-                        pi['col_prize'] = sel_prize if sel_prize != "(공란)" else ""
-                    st.markdown("</div>", unsafe_allow_html=True)
-                    updated_items.append(pi)
-                cfg['prize_items'] = updated_items
-                
-                if st.button("➕ 시상금 항목 추가", key=f"cpiadd_{idx}", use_container_width=True):
-                    cfg['prize_items'].append({"label": f"시상금{len(cfg['prize_items'])+1}", "col_eligible": "", "col_prize": ""})
-                    st.rerun()
-                
-                if st.button("💾 이 항목 저장", key=f"psave_{idx}"):
-                    st.session_state['prize_config'] = prize_cfgs
-                    save_data_and_config()
-                    st.success(f"'{cfg['name']}' 저장됨")
-        
-        if not prize_cfgs:
-            st.info("시상금 시책이 없습니다. 위 버튼으로 추가하거나, 아래에서 기존 앱의 설정을 가져오세요.")
-        
-        st.markdown("---")
-        st.markdown("**📥 기존 시상금 앱에서 설정 가져오기**")
-        st.caption("기존 시상금 계산 앱의 config.json 파일을 업로드하면 시책 설정이 자동으로 변환됩니다.")
-        json_file = st.file_uploader("config.json 파일 업로드", type=['json'], key="import_prize_json")
-        if json_file is not None:
-            try:
-                imported = json.load(json_file)
-                if not isinstance(imported, list):
-                    st.error("올바른 config.json 형식이 아닙니다.")
-                else:
-                    for c in imported:
-                        if 'category' not in c: c['category'] = 'weekly'
-                        c.pop('file', None)
-                        c.pop('col_name', None)
-                        c.pop('col_branch', None)
-                        c.pop('col_agency', None)
-                        c.pop('col_manager_code', None)
-                        c.pop('col_manager', None)
-                    
-                    weekly_cnt = sum(1 for c in imported if c.get('category', 'weekly') == 'weekly')
-                    cumul_cnt = sum(1 for c in imported if c.get('category') == 'cumulative')
-                    st.success(f"✅ {len(imported)}개 시책 감지됨 (주차/브릿지 {weekly_cnt}개 + 누계 {cumul_cnt}개)")
-                    
-                    for c in imported:
-                        st.markdown(f"- {'📌' if c.get('category')=='weekly' else '📈'} **{c.get('name', '?')}** ({c.get('type', '?')})")
-                    
-                    col_a, col_b = st.columns(2)
-                    with col_a:
-                        if st.button("✅ 기존 설정에 추가 (병합)", key="merge_json"):
-                            prize_cfgs.extend(imported)
-                            st.session_state['prize_config'] = prize_cfgs
-                            save_data_and_config()
-                            st.success("기존 설정에 추가 완료!")
-                            st.rerun()
-                    with col_b:
-                        if st.button("🔄 기존 설정 대체 (교체)", key="replace_json"):
-                            st.session_state['prize_config'] = imported
-                            save_data_and_config()
-                            st.success("설정 교체 완료!")
-                            st.rerun()
-            except json.JSONDecodeError:
-                st.error("JSON 파일 형식이 올바르지 않습니다.")
-            
-    else:
-        st.info("👆 먼저 위에서 두 파일을 업로드하고 [데이터 병합 및 교체]를 눌러주세요.")
-
-# ==========================================
-# 5. 매니저 화면 (Manager View)
-# ==========================================
-elif menu == "매니저 화면 (로그인)":
-    st.session_state['admin_authenticated'] = False
-    
-    df_check = st.session_state.get('df_merged', pd.DataFrame())
-    if not isinstance(df_check, pd.DataFrame) or df_check.empty or not st.session_state.get('manager_col'):
-        st.title("👤 매니저 전용 실적 현황")
-        st.warning("현재 저장된 데이터가 없거나 관리자 설정이 완료되지 않았습니다.")
-        st.stop()
-        
-    df = st.session_state['df_merged'].copy()
-    manager_col = st.session_state['manager_col']
-    manager_name_col = st.session_state.get('manager_name_col', manager_col)
-    
-    with st.form("login_form"):
-        manager_code = st.text_input("🔑 매니저 코드를 입력하세요", type="password")
-        submit_login = st.form_submit_button("로그인 및 조회")
-    
-    if submit_login and manager_code:
-        manager_code_clean = clean_key(manager_code)
-        
-        df['search_key'] = df[manager_col].apply(clean_key)
-        mask = df['search_key'] == manager_code_clean
-        
-        manager_col2 = st.session_state.get('manager_col2', '')
-        if manager_col2 and manager_col2 in df.columns:
-            df['search_key2'] = df[manager_col2].apply(clean_key)
-            mask = mask | (df['search_key2'] == manager_code_clean)
-        
-        my_df = df[mask].copy()
-        
-        if my_df.empty:
-            partial_mask = df['search_key'].str.contains(manager_code_clean, na=False)
-            if manager_col2 and 'search_key2' in df.columns:
-                partial_mask = partial_mask | df['search_key2'].str.contains(manager_code_clean, na=False)
-            my_df = df[partial_mask].copy()
-
-        if my_df.empty:
-            st.error(f"❌ 매니저 코드 '{manager_code}'에 일치하는 데이터를 찾을 수 없습니다.")
-        else:
-          try:
-            manager_name = "매니저"
-            if manager_name_col in my_df.columns:
-                name_vals = my_df[manager_name_col].dropna()
-                if not name_vals.empty:
-                    manager_name = str(name_vals.iloc[0])
-            
-            data_date = st.session_state.get('data_date', '')
-            date_html = f"<span class='data-date' style='font-size:14px; color:rgba(255,255,255,0.85); float:right; margin-top:8px;'>📅 데이터 기준일: {data_date}</span>" if data_date else ""
-            
-            st.markdown(f"""
-            <div class='toss-header'>
-                {date_html}
-                <h1 class='toss-title'>{manager_name} <span class='toss-subtitle'>({manager_code_clean})</span></h1>
-                <p class='toss-desc'>산하 팀장분들의 실적 현황입니다. (총 {len(my_df)}명)</p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            display_cols = []
-            
-            if st.session_state['admin_categories']:
-                if '맞춤분류' not in my_df.columns:
-                    my_df['맞춤분류'] = ""
-                for cat in st.session_state['admin_categories']:
-                    c_name = cat.get('name', '')
-                    final_mask = pd.Series(True, index=my_df.index)
-                    cond_list = cat.get('conditions', [{'col': cat.get('col'), 'cond': cat.get('condition')}])
-                    
-                    for cond_info in cond_list:
-                        if not cond_info.get('col'): continue
-                        mask = evaluate_condition(my_df, cond_info['col'], cond_info['cond'])
-                        final_mask = final_mask & mask
-                        
-                    my_df.loc[final_mask, '맞춤분류'] += f"[{c_name}] "
-                display_cols.append('맞춤분류')
-            
-            for item in st.session_state['admin_cols']:
-                orig_col = item['col']
-                fallback_col = item.get('fallback_col', '')
-                disp_col = item.get('display_name', orig_col)
-                
-                if item['type'] == '숫자' and item['condition']:
-                    mask = evaluate_condition(my_df, orig_col, item['condition'])
-                    my_df = my_df[mask]
-                
-                if fallback_col and fallback_col in my_df.columns and orig_col in my_df.columns:
-                    my_df[disp_col] = my_df[orig_col].combine_first(my_df[fallback_col])
-                elif orig_col in my_df.columns:
-                    my_df[disp_col] = my_df[orig_col]
-                else:
-                    my_df[disp_col] = ""
-                display_cols.append(disp_col)
-            
-            goals = st.session_state.get('admin_goals', [])
-            if isinstance(goals, dict):
-                goals = [{"target_col": k, "ref_col": "", "tiers": v} for k, v in goals.items()]
-            
-            for goal in goals:
-                g_col = goal['target_col']
-                ref_col = goal.get('ref_col', '')
-                tiers = goal['tiers']
-                
-                if g_col not in my_df.columns:
-                    continue
-                
-                cleaned_str = my_df[g_col].astype(str).str.replace(',', '', regex=False)
-                my_df[g_col] = pd.to_numeric(cleaned_str, errors='coerce').fillna(0)
-                
-                if ref_col and ref_col in my_df.columns:
-                    ref_cleaned = my_df[ref_col].astype(str).str.replace(',', '', regex=False)
-                    my_df[ref_col] = pd.to_numeric(ref_cleaned, errors='coerce').fillna(0)
-                
-                def calc_shortfall(row):
-                    val = row[g_col]
-                    if ref_col and ref_col in row.index:
-                        ref_val = row[ref_col]
-                        applicable_tiers = [t for t in tiers if t <= ref_val]
-                        if not applicable_tiers:
-                            return pd.Series(["목표 없음", 0])
-                    else:
-                        applicable_tiers = tiers
-                    
-                    for t in applicable_tiers:
-                        if val < t:
-                            if t % 10000 == 0: tier_str = f"{int(t)//10000}만"
-                            else: tier_str = f"{t/10000:g}만"
-                            return pd.Series([tier_str, t - val])
-                    return pd.Series(["최고 구간 달성", 0])
-                
-                next_target_col = f"{g_col} 다음목표"
-                shortfall_col = f"{g_col} 부족금액"
-                
-                my_df[[next_target_col, shortfall_col]] = my_df.apply(calc_shortfall, axis=1)
-                if next_target_col not in display_cols:
-                    display_cols.extend([next_target_col, shortfall_col])
-
-            sort_keys = []
-            if '맞춤분류' in my_df.columns: sort_keys.append('맞춤분류')
-            ji_cols = [c for c in display_cols if '지사명' in c]
-            if not ji_cols: ji_cols = [c for c in my_df.columns if '지사명' in c]
-            if ji_cols: sort_keys.append(ji_cols[0])
-            gender_name_cols = [c for c in display_cols if '성별' in c or '설계사명' in c or '성명' in c or '이름' in c or '팀장명' in c]
-            if not gender_name_cols: gender_name_cols = [c for c in my_df.columns if '성별' in c or '설계사명' in c or '성명' in c or '팀장명' in c]
-            if gender_name_cols: sort_keys.append(gender_name_cols[0])
-            if sort_keys:
-                my_df = my_df.sort_values(by=sort_keys, ascending=[True] * len(sort_keys))
-            
-            final_cols = list(dict.fromkeys(display_cols))
-            ordered_final_cols = []
-            for c in st.session_state.get('col_order', []):
-                if c in final_cols: ordered_final_cols.append(c)
-            for c in final_cols:
-                if c not in ordered_final_cols: ordered_final_cols.append(c)
-                    
-            if not ordered_final_cols:
-                st.warning("관리자 화면에서 표시할 항목을 추가해주세요.")
+    if not st.session_state.contact_logged_in:
+        st.markdown("<h3 class='main-title'>지원매니저 코드를 입력하세요</h3>", unsafe_allow_html=True)
+        mgr_input = st.text_input("매니저 코드", type="password", placeholder="예: 12345", label_visibility="collapsed")
+        if st.button("접촉 대상 조회하기", type="primary"):
+            if not mgr_input:
+                st.warning("코드를 입력해주세요.")
             else:
-                final_df = my_df[ordered_final_cols].copy()
-                
-                final_df.insert(0, '순번', range(1, len(final_df) + 1))
-                
-                for c in final_df.columns:
-                    if c != '순번' and '코드' not in c and '연도' not in c:
-                        def format_with_comma_and_hide_zero(val):
-                            try:
-                                if pd.isna(val) or str(val).strip() == "": return ""
-                                clean_val = str(val).replace(',', '')
-                                num = float(clean_val)
-                                if num == 0: return ""
-                                if num.is_integer(): return f"{int(num):,}"
-                                return f"{num:,.1f}"
-                            except:
-                                if str(val).strip() == "0" or str(val).strip() == "0.0": return ""
-                                return val
-                        
-                        final_df[c] = final_df[c].apply(format_with_comma_and_hide_zero)
-                
-                col_groups = st.session_state.get('col_groups', [])
-                
-                # ★★★ 수정된 시상금 계산: 각 행의 에이전트 고유 코드 사용 ★★★
-                prize_data_map = {}
+                sic   = safe_str(mgr_input)
+                found = False
+                if mgr_code_col and mgr_code_col in bridge_df.columns:
+                    if sic in get_clean_series(bridge_df, mgr_code_col).unique(): found = True
+                if not found:
+                    for ci, cfg in enumerate(st.session_state.get('config', [])):
+                        mc = cfg.get('col_manager_code','') or cfg.get('col_manager','')
+                        if mc:
+                            df = _get_merged_df(ci)
+                            if df is not None and mc in df.columns:
+                                if sic in get_clean_series(df, mc).unique():
+                                    found = True; mgr_code_col = mc; break
+                if found:
+                    st.session_state.contact_logged_in  = True
+                    st.session_state.contact_mgr_code   = sic
+                    # 메시지 캐시 초기화
+                    for k in list(st.session_state.keys()):
+                        if k.startswith('cmsg_'): del st.session_state[k]
+                    st.rerun()
+                else:
+                    st.error(f"❌ 코드 '{mgr_input}'가 데이터에 없습니다.")
+        return
+
+    # ── 로그인 성공 ──────────────────────────────────────────
+    mgr_code = st.session_state.contact_mgr_code
+    col_lo, _ = st.columns([2, 8])
+    with col_lo:
+        if st.button("🚪 로그아웃"):
+            st.session_state.contact_logged_in = False
+            st.rerun()
+
+    # 매니저 이름
+    mgr_name = ""
+    if mgr_name_col and mgr_name_col in bridge_df.columns and mgr_code_col and mgr_code_col in bridge_df.columns:
+        mdf = bridge_df[get_clean_series(bridge_df, mgr_code_col) == mgr_code]
+        if not mdf.empty: mgr_name = _clean_excel_text(safe_str(mdf[mgr_name_col].values[0]))
+    if not mgr_name:
+        for ci, cfg in enumerate(st.session_state.get('config', [])):
+            mc = cfg.get('col_manager_code','') or cfg.get('col_manager','')
+            mn = cfg.get('col_manager_name','')
+            if mc and mn:
+                df = _get_merged_df(ci)
+                if df is not None and mc in df.columns and mn in df.columns:
+                    mdf = df[get_clean_series(df, mc) == mgr_code]
+                    if not mdf.empty: mgr_name = _clean_excel_text(safe_str(mdf[mn].values[0])); break
+
+    display_mgr = mgr_name if mgr_name else mgr_code
+
+    # ── 데이터 필터 & 계산 ──────────────────────────────────
+    if not (mgr_code_col and mgr_code_col in bridge_df.columns):
+        st.error("⚠️ 매니저 코드 컬럼을 찾을 수 없습니다.")
+        return
+
+    raw_df = bridge_df[get_clean_series(bridge_df, mgr_code_col) == mgr_code].copy().reset_index(drop=True)
+    if raw_df.empty:
+        st.info("해당 매니저의 접촉 대상이 없습니다.")
+        return
+
+    # ① 필터: 브릿지실적_2월 >= 100,000
+    if '브릿지실적_2월' in raw_df.columns:
+        raw_df = raw_df[raw_df['브릿지실적_2월'].apply(safe_float) >= 100000].reset_index(drop=True)
+
+    if raw_df.empty:
+        st.info("브릿지실적_2월 10만원 이상인 접촉 대상이 없습니다.")
+        return
+
+    # 전체 계산 → rows 리스트
+    rows = []
+    for i, row in raw_df.iterrows():
+        def gv(col, r=row):
+            return safe_float(r.get(col, 0))
+
+        aname  = _clean_excel_text(safe_str(row[agent_name_col])) if agent_name_col and agent_name_col in row.index else f"설계사{i+1}"
+        agency = _clean_excel_text(safe_str(row[agency_col]))     if agency_col     and agency_col     in row.index else ""
+
+        br2  = gv('브릿지실적_2월')
+        btir = gv('브릿지실적구간_2월')
+        cr2  = gv('연속가동실적_2월')
+        ctir = gv('연속가동실적구간_2월')
+        br3  = gv('브릿지실적_3월')
+        bsf  = gv('브릿지부족금액_3월')
+
+        # 브릿지 시상금
+        if btir >= 500000:   b_rate = 3.0
+        elif btir >= 200000: b_rate = 2.0
+        else:                b_rate = 1.0
+        bp = (btir + 100000) * b_rate
+
+        # 연속가동 시상금
+        if ctir >= 500000:   c_rate = 3.0
+        elif ctir >= 200000: c_rate = 2.0
+        else:                c_rate = 1.0
+        cp = (ctir + 100000) * c_rate
+
+        tp = bp + cp
+
+        achieved = (br3 >= 100000)
+        if achieved:
+            msg_default = f"달성!"
+        else:
+            msg_default = (
+                f"★{aname} 팀장님!★  안녕하세요. {display_mgr} 매니저입니다.\n"
+                f"팀장님께 좋은 소식 전해드리려고 연락드렸어요! 🎉\n"
+                f"8일 마감이었던 브릿지+연속가동 2배 시상이\n"
+                f"★15일까지 연장★되었습니다!\n\n"
+                f"지난 2월 브릿지 실적 ★{br2:,.0f}원★ 으로 \n"
+                f"★{bp:,.0f}원★ 브릿지 시상에\n"
+                f"연속가동 실적 ★{cr2:,.0f}원★ 으로 \n"
+                f"★{cp:,.0f}원★ 연속가동 시상까지\n"
+                f"합산 ★{tp:,.0f}원★ 을 아직 받으실 수 있습니다.\n\n"
+                f"그런데 현재 ★{br3:,.0f}원★ 이셔서 \n"
+                f"★{bsf:,.0f}원★이 부족하세요. T_T\n"
+                f"15일까지 10만원만 하시면 됩니다!\n\n"
+                f"오늘 10만원 하실 수 있는 플랜은 \n"
+                f"1. 가장 체결률 좋은 진단및치료비 + 비통치, 항암 26종 플랜\n"
+                f"2. 지난 달보다 진단비 가격이 10%나 하락한 5.10.5\n"
+                f"3. 새로나온 표적항암 2억에 1만원도 안되는 1.2.3 또또암 플랜 등이 있습니다.\n\n"
+                f"지금 바로 연락주시면 설계 도와드릴께요!\n\n"
+                f"오늘도 좋은 하루 되시고 시상금 꼭 챙겨가세요!"
+            )
+        rows.append(dict(
+            idx=i, aname=aname, agency=agency,
+            br2=br2, btir=btir, cr2=cr2, ctir=ctir,
+            br3=br3, bsf=bsf, bp=bp, cp=cp, tp=tp,
+            achieved=achieved, msg_default=msg_default
+        ))
+
+
+    # 합계 시상금 큰 순 (데스크탑/모바일 공통)
+    rows.sort(key=lambda r: r['tp'], reverse=True)
+
+    is_mobile = st.session_state.get('contact_view', 'desktop') == 'mobile'
+
+    mgr_label = f"{mgr_name} 매니저" if mgr_name else f"코드 {mgr_code}"
+    hdr_c, tog_c = st.columns([9, 1])
+    with hdr_c:
+        st.markdown(
+            f"<h3 class='main-title' style='margin-bottom:4px;'>📋 {mgr_label}님 접촉 대상 — {len(rows)}명</h3>",
+            unsafe_allow_html=True
+        )
+    with tog_c:
+        cur_icon = "📱" if is_mobile else "🖥️"
+        if st.button(cur_icon, key="cv_tog"):
+            nxt = 'desktop' if is_mobile else 'mobile'
+            st.session_state['contact_view'] = nxt
+            st.rerun()
+
+    if is_mobile:
+        st.caption("📱 합계 시상금 큰 순 · 버튼 클릭 시 카카오톡 공유 화면으로 이동")
+    else:
+        st.caption("🖥️ 합계 시상금 큰 순 · 메시지 직접 수정 후 복사")
+
+    # ── 메시지 세션 초기화 (처음 로드 시 default 삽입) ─────
+    for r in rows:
+        skey = f"cmsg_{r['idx']}"
+        if skey not in st.session_state:
+            st.session_state[skey] = r['msg_default']
+
+    # ══════════════════════════════════════════════════════
+    # 🖥️ 데스크탑 뷰: 1줄 = 정보 | 메시지 편집 | 버튼
+    # ══════════════════════════════════════════════════════
+    if not is_mobile:
+        for r in rows:
+            skey = f"cmsg_{r['idx']}"
+            if r['achieved']:
+                sf_badge = "<span style='color:#2e7d32;font-size:0.85rem;font-weight:800;'>🏆 달성!</span>"
+                card_bg  = "#f0faf4"
+                border   = "2px solid #81c995"
+            else:
+                sf_badge = (f"<span style='color:#d9232e;font-size:0.85rem;font-weight:700;'>"
+                            f"⚠️ {r['bsf']:,.0f}원 부족</span>") if r['bsf'] > 0 else \
+                           "<span style='color:#2e7d32;font-size:0.85rem;font-weight:700;'>✅ 달성</span>"
+                card_bg  = "#fff"
+                border   = "1px solid #e5e8eb"
+
+            info_html = f"""
+            <div style='background:{card_bg};border:{border};border-radius:12px;
+                        padding:12px 14px;height:100%;'>
+                <div style='font-size:1.1rem;font-weight:800;color:#191f28;margin-bottom:4px;'>
+                    👤 {r['aname']}
+                </div>
+                <div style='font-size:0.9rem;color:#8b95a1;margin-bottom:8px;'>
+                    📍 {r['agency'] if r['agency'] else '—'}
+                </div>
+                <div style='background:#fff8f8;border-radius:8px;padding:6px 10px;margin-bottom:4px;'>
+                    <span style='font-size:0.8rem;color:#8b95a1;'>브릿지 시상금</span>
+                    <span style='font-size:1.05rem;font-weight:800;color:rgb(128,0,0);
+                                float:right;'>{r['bp']:,.0f}원</span>
+                </div>
+                <div style='background:#f8f8ff;border-radius:8px;padding:6px 10px;margin-bottom:6px;'>
+                    <span style='font-size:0.8rem;color:#8b95a1;'>연속가동 시상금</span>
+                    <span style='font-size:1.05rem;font-weight:800;color:#1e3c72;
+                                float:right;'>{r['cp']:,.0f}원</span>
+                </div>
+                <div style='display:flex;justify-content:space-between;align-items:center;'>
+                    <span style='font-size:1.15rem;font-weight:800;color:rgb(128,0,0);'>
+                        💰 {r['tp']:,.0f}원
+                    </span>
+                    {sf_badge}
+                </div>
+            </div>"""
+
+            col_info, col_msg, col_btn = st.columns([2, 4, 2], gap="medium")
+            with col_info:
+                st.markdown(info_html, unsafe_allow_html=True)
+            with col_msg:
+                st.text_area(
+                    skey,
+                    value=st.session_state[skey],
+                    key=skey,
+                    height=210,
+                    label_visibility="hidden",
+                    disabled=r['achieved']
+                )
+            with col_btn:
+                if r['achieved']:
+                    st.markdown(
+                        "<div style='display:flex;align-items:center;justify-content:center;"
+                        "height:210px;font-size:1.5rem;font-weight:800;color:#2e7d32;"
+                        "text-align:center;'>🏆<br>달성!</div>",
+                        unsafe_allow_html=True
+                    )
+                else:
+                    render_kakao_send_btn(skey, r['aname'], f"d{r['idx']}", height=225)
+
+            st.markdown("<hr style='margin:6px 0 10px;opacity:0.1;'>", unsafe_allow_html=True)
+
+    # ══════════════════════════════════════════════════════
+    # 📱 모바일 뷰: 카드 → 메시지 편집 → 전송 버튼
+    # ══════════════════════════════════════════════════════
+    else:
+        for r in rows:
+            skey = f"cmsg_{r['idx']}"
+            if r['achieved']:
+                sf_badge  = "<span style='color:#2e7d32;font-weight:800;font-size:1.05rem;'>🏆 달성!</span>"
+                card_border = "border:2px solid #81c995;background:#f0faf4;"
+            else:
+                sf_badge  = (f"<span class='contact-shortfall'>⚠️ {r['bsf']:,.0f}원 부족</span>") \
+                             if r['bsf'] > 0 else \
+                             "<span style='color:#2e7d32;font-weight:700;'>✅ 달성 완료</span>"
+                card_border = ""
+
+            card_html = f"""
+            <div class='contact-card' style='{card_border}'>
+                <div style='display:flex;justify-content:space-between;
+                            align-items:flex-start;margin-bottom:8px;'>
+                    <div>
+                        <div class='contact-name'>👤 {r['aname']} 팀장님</div>
+                        <div class='contact-org'>📍 {r['agency'] if r['agency'] else '—'}</div>
+                    </div>
+                    <div class='contact-prize-total'>💰 {r['tp']:,.0f}원</div>
+                </div>
+                <div style='display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px;'>
+                    <div style='flex:1;min-width:120px;background:#fff8f8;
+                                border-radius:10px;padding:8px 10px;'>
+                        <div style='font-size:0.85rem;color:#8b95a1;'>브릿지 시상금</div>
+                        <div style='font-size:1.15rem;font-weight:800;
+                                    color:rgb(128,0,0);'>{r['bp']:,.0f}원</div>
+                        <div style='font-size:0.8rem;color:#aaa;'>2월 실적 {r['br2']:,.0f}원</div>
+                    </div>
+                    <div style='flex:1;min-width:120px;background:#f8f8ff;
+                                border-radius:10px;padding:8px 10px;'>
+                        <div style='font-size:0.85rem;color:#8b95a1;'>연속가동 시상금</div>
+                        <div style='font-size:1.15rem;font-weight:800;
+                                    color:#1e3c72;'>{r['cp']:,.0f}원</div>
+                        <div style='font-size:0.8rem;color:#aaa;'>2월 실적 {r['cr2']:,.0f}원</div>
+                    </div>
+                </div>
+                <div style='display:flex;justify-content:space-between;
+                            align-items:center;padding:6px 0 2px;'>
+                    <span style='color:#8b95a1;font-size:0.9rem;'>
+                        3월 현재: {r['br3']:,.0f}원
+                    </span>
+                    {sf_badge}
+                </div>
+            </div>"""
+            st.markdown(card_html, unsafe_allow_html=True)
+
+            if r['achieved']:
+                # 달성자: 메시지 창(읽기 전용) + 카톡 버튼 없음
+                st.text_area(
+                    f"({r['aname']})",
+                    value=st.session_state[skey],
+                    key=skey,
+                    height=68,
+                    disabled=True,
+                    label_visibility="collapsed"
+                )
+            else:
+                # 미달성: 편집 가능 + 카톡 버튼
+                st.text_area(
+                    skey,           # label = skey → JS 검색용
+                    value=st.session_state[skey],
+                    key=skey,
+                    height=260,
+                    label_visibility="hidden"
+                )
+                render_kakao_send_btn(skey, r['aname'], f"m{r['idx']}", height=80)
+            st.markdown("<hr style='margin:12px 0;opacity:0.12;'>", unsafe_allow_html=True)
+
+
+# ==========================================
+# 📱 메뉴 (4개)
+# ==========================================
+mode = st.radio(
+    "화면 선택",
+    ["📊 내 실적 조회", "👥 매니저 관리", "📞 오늘 접촉 대상", "⚙️ 시스템 관리자"],
+    horizontal=True,
+    label_visibility="collapsed"
+)
+
+# ==========================================
+# 📞 오늘 접촉 대상
+# ==========================================
+if mode == "📞 오늘 접촉 대상":
+    page_contact()
+
+# ==========================================
+# 👥 매니저 관리
+# ==========================================
+elif mode == "👥 매니저 관리":
+    st.markdown('<div class="title-band">매니저 소속 실적 관리</div>', unsafe_allow_html=True)
+    if 'mgr_logged_in' not in st.session_state: st.session_state.mgr_logged_in = False
+    if not st.session_state.mgr_logged_in:
+        mgr_code = st.text_input("지원매니저 사번(코드)을 입력하세요", type="password", placeholder="예: 12345")
+        if st.button("로그인", type="primary"):
+            if not mgr_code: st.warning("지원매니저 코드를 입력해주세요.")
+            else:
+                sic = safe_str(mgr_code); avc = set()
+                for ci, cfg in enumerate(st.session_state['config']):
+                    mc = cfg.get('col_manager_code','') or cfg.get('col_manager','')
+                    if mc:
+                        df = _get_merged_df(ci)
+                        if df is not None and mc in df.columns:
+                            for cv in get_clean_series(df, mc).unique():
+                                if cv: avc.add(cv)
+                if sic in avc:
+                    st.session_state.mgr_logged_in=True; st.session_state.mgr_code=sic; st.session_state.mgr_step='main'
+                    save_log("매니저", sic, "MANAGER_LOGIN"); st.rerun()
+                else:
+                    st.error(f"❌ 입력하신 코드({mgr_code})가 존재하지 않습니다.")
+                    if avc: st.warning(f"🧐 인식 코드 예시: {', '.join(list(avc)[:10])}")
+    else:
+        if st.button("🚪 로그아웃"): st.session_state.mgr_logged_in=False; st.rerun()
+        st.markdown('<br>', unsafe_allow_html=True)
+        step = st.session_state.get('mgr_step','main')
+        if step == 'main':
+            st.markdown("<h3 class='main-title'>어떤 실적을 확인하시겠습니까?</h3>", unsafe_allow_html=True)
+            c1,c2=st.columns(2)
+            with c1:
+                if st.button("📁 구간실적 관리", use_container_width=True): st.session_state.mgr_step='tiers'; st.session_state.mgr_category='구간'; st.rerun()
+            with c2:
+                if st.button("📁 브릿지실적 관리", use_container_width=True): st.session_state.mgr_step='tiers'; st.session_state.mgr_category='브릿지'; st.rerun()
+        elif step == 'tiers':
+            if st.button("⬅️ 뒤로가기"): st.session_state.mgr_step='main'; st.rerun()
+            cat=st.session_state.mgr_category; my_agents=set(); slc=st.session_state.mgr_code
+            for ci,cfg in enumerate(st.session_state['config']):
+                if cfg.get('category')=='cumulative': continue
+                mc=cfg.get('col_manager_code','') or cfg.get('col_manager',''); cc=cfg.get('col_code','')
+                if not mc or not cc: continue
+                df=_get_merged_df(ci)
+                if df is None or mc not in df.columns or cc not in df.columns: continue
+                mask=get_clean_series(df,mc)==slc
+                for ac in get_clean_series(df,cc)[mask]:
+                    if ac: my_agents.add(ac)
+            st.markdown(f"<h3 class='main-title'>📁 {cat}실적 근접자 조회 (소속: 총 {len(my_agents)}명)</h3>", unsafe_allow_html=True)
+            ranges={500000:(300000,float('inf')),300000:(200000,300000),200000:(100000,200000),100000:(0,100000)}
+            counts={k:0 for k in ranges}
+            for ac in my_agents:
+                cr2,_=calculate_agent_performance(ac); mf=set()
+                for res in cr2:
+                    if cat=="구간" and "구간" not in res['type']: continue
+                    if cat=="브릿지" and "브릿지" not in res['type']: continue
+                    val=res.get('val', res.get('val_prev', res.get('val_curr', 0.0)))
+                    if val is None: val=0.0
+                    for t,(mn,mx) in ranges.items():
+                        if mn<=val<mx: mf.add(t); break
+                for t in mf: counts[t]+=1
+            for t,(mn,mx) in ranges.items():
+                ct=counts[t]
+                if t==500000: lbl=f"📁 50만 구간 근접 및 달성 (30만 이상) - 총 {ct}명"
+                else: lbl=f"📁 {int(t//10000)}만 구간 근접자 ({int(mn//10000)}만~{int(mx//10000)}만) - 총 {ct}명"
+                if st.button(lbl, use_container_width=True, key=f"t_{t}"):
+                    st.session_state.mgr_step='list'; st.session_state.mgr_target=t
+                    st.session_state.mgr_min_v=mn; st.session_state.mgr_max_v=mx
+                    st.session_state.mgr_agents=my_agents; st.rerun()
+        elif step == 'list':
+            if st.button("⬅️ 폴더로 돌아가기"): st.session_state.mgr_step='tiers'; st.rerun()
+            cat=st.session_state.mgr_category; target=st.session_state.mgr_target
+            min_v=st.session_state.mgr_min_v; max_v=st.session_state.mgr_max_v; my_agents=st.session_state.mgr_agents
+            if target==500000: st.markdown("<h3 class='main-title'>👥 50만 구간 근접 및 달성자 명단</h3>", unsafe_allow_html=True)
+            else: st.markdown(f"<h3 class='main-title'>👥 {int(target//10000)}만 구간 근접자 명단</h3>", unsafe_allow_html=True)
+            st.info("💡 이름을 클릭하면 상세 실적을 확인하고 카톡으로 전송할 수 있습니다.")
+            near=[]
+            for code in my_agents:
+                cr2,_=calculate_agent_performance(code)
+                an="이름없음"; aa=""
+                for ci,cfg in enumerate(st.session_state['config']):
+                    if cfg.get('col_code') and cfg.get('col_name'):
+                        df=_get_merged_df(ci)
+                        if df is not None and cfg['col_code'] in df.columns:
+                            mask=get_clean_series(df,cfg['col_code'])==code; mdf=df[mask]
+                            if not mdf.empty:
+                                if cfg['col_name'] in mdf.columns: an=safe_str(mdf[cfg['col_name']].values[0])
+                                ag=cfg.get('col_agency',''); br=cfg.get('col_branch','')
+                                if ag and ag in df.columns: aa=_clean_excel_text(safe_str(mdf[ag].values[0]))
+                                elif br and br in df.columns: aa=_clean_excel_text(safe_str(mdf[br].values[0]))
+                                break
+                for res in cr2:
+                    if cat=="구간" and "구간" not in res['type']: continue
+                    if cat=="브릿지" and "브릿지" not in res['type']: continue
+                    val=res.get('val', res.get('val_prev', res.get('val_curr', 0.0)))
+                    if val is None: val=0.0
+                    if min_v<=val<max_v: near.append((code,an,aa,val)); break
+            if not near: st.info("해당 구간에 소속 설계사가 없습니다.")
+            else:
+                near.sort(key=lambda x:(x[2],x[1]))
+                for code,name,agency,val in near:
+                    if st.button(f"👤 [{agency}] {name} 설계사님 (현재 {val:,.0f}원)", use_container_width=True, key=f"btn_{code}"):
+                        st.session_state.mgr_selected_code=code; st.session_state.mgr_selected_name=f"[{agency}] {name}"
+                        st.session_state.mgr_step='detail'; st.rerun()
+        elif step == 'detail':
+            if st.button("⬅️ 명단으로 돌아가기"): st.session_state.mgr_step='list'; st.rerun()
+            code=st.session_state.mgr_selected_code; name=st.session_state.mgr_selected_name
+            st.markdown("<div class='detail-box'>", unsafe_allow_html=True)
+            st.markdown(f"<h4 class='agent-title'>👤 {name} 설계사님</h4>", unsafe_allow_html=True)
+            cr2,tp=calculate_agent_performance(code)
+            render_ui_cards(name,cr2,tp,show_share_text=True)
+            ulp=os.path.join(DATA_DIR,"leaflet.png")
+            if os.path.exists(ulp): st.image(ulp, use_container_width=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+# ==========================================
+# 🔒 시스템 관리자
+# ==========================================
+elif mode == "⚙️ 시스템 관리자":
+    st.markdown("<h2 class='admin-title'>관리자 설정</h2>", unsafe_allow_html=True)
+    admin_pw = st.text_input("관리자 비밀번호를 입력하세요", type="password")
+    try: real_pw = st.secrets["admin_password"]
+    except: real_pw = "wolf7998"
+    if admin_pw != real_pw:
+        if admin_pw: st.error("비밀번호가 일치하지 않습니다.")
+        st.stop()
+    st.success("인증 성공! 변경 사항은 가장 아래 [서버에 반영하기] 버튼을 눌러야 저장됩니다.")
+    if os.path.exists(LOG_FILE):
+        with open(LOG_FILE,"rb") as f:
+            st.download_button("📊 접속 로그 다운로드",data=f,file_name=f"access_log_{datetime.now().strftime('%Y%m%d')}.csv",mime="text/csv")
+    st.markdown("<hr style='margin:15px 0;'>", unsafe_allow_html=True)
+
+    # --- [1] 파일 업로드 ---
+    st.markdown("<h3 class='sub-title'>📂 1. 실적 파일 업로드 및 관리</h3>", unsafe_allow_html=True)
+    st.info("💡 시상 항목이 여러 파일에 나뉘어 있으면 모두 업로드하세요. 브릿지 파일도 여기서 업로드하세요.")
+    uploaded_files = st.file_uploader("CSV/엑셀 파일 업로드", accept_multiple_files=True, type=['csv','xlsx'])
+    if uploaded_files:
+        nu = False
+        for file in uploaded_files:
+            if file.name not in st.session_state['raw_data']:
+                if file.name.endswith('.csv'):
+                    try: df=pd.read_csv(file)
+                    except:
+                        file.seek(0)
+                        try: df=pd.read_csv(file,sep='\t')
+                        except:
+                            file.seek(0)
+                            try: df=pd.read_csv(file,encoding='cp949')
+                            except: file.seek(0); df=pd.read_csv(file,sep='\t',encoding='cp949')
+                else: df=pd.read_excel(file)
+                df.columns=[_clean_excel_text(str(c)) for c in df.columns]
+                for col in df.select_dtypes(include='object').columns:
+                    df[col]=df[col].apply(lambda v: _clean_excel_text(str(v)) if pd.notna(v) else v)
+                st.session_state['raw_data'][file.name]=df
+                df.to_pickle(os.path.join(DATA_DIR, f"{file.name}.pkl")); nu=True
+        if nu: st.success("✅ 파일 업로드 완료."); st.rerun()
+    c1,c2=st.columns([7,3])
+    with c1: st.markdown(f"**현재 저장된 파일 ({len(st.session_state['raw_data'])}개)**")
+    with c2:
+        if st.button("🗑️ 전체 파일 삭제", use_container_width=True):
+            st.session_state['raw_data'].clear(); st.session_state['merged_data']={}
+            for f in os.listdir(DATA_DIR):
+                if f.endswith('.pkl'): os.remove(os.path.join(DATA_DIR,f))
+            st.rerun()
+    if not st.session_state['raw_data']: st.info("업로드된 파일이 없습니다.")
+    else:
+        for fn in list(st.session_state['raw_data'].keys()):
+            dfp=st.session_state['raw_data'][fn]; cc=len([c for c in dfp.columns if not c.startswith('_clean_')]); rc=len(dfp)
+            cn,cb=st.columns([8,2])
+            with cn: st.write(f"📄 {fn} ({rc}행 × {cc}열)")
+            with cb:
+                if st.button("삭제",key=f"del_file_{fn}",use_container_width=True):
+                    del st.session_state['raw_data'][fn]
+                    pp=os.path.join(DATA_DIR,f"{fn}.pkl")
+                    if os.path.exists(pp): os.remove(pp)
+                    st.rerun()
+            st.markdown("<hr style='margin:5px 0;opacity:0.1;'>", unsafe_allow_html=True)
+
+    file_opts = list(st.session_state['raw_data'].keys())
+
+    # --- [2] 주차/브릿지 시상 ---
+    st.divider()
+    st.markdown("<h3 class='sub-title' style='margin-top:10px;'>🏆 2. 주차/브릿지 시상 항목 관리</h3>", unsafe_allow_html=True)
+    ca,cd=st.columns(2)
+    with ca:
+        if st.button("➕ 신규 시상 추가", type="primary", use_container_width=True):
+            if not file_opts: st.error("⚠️ 먼저 파일 업로드 필요")
+            else:
+                st.session_state['config'].append({
+                    "name":f"신규 주차 시책 {len(st.session_state['config'])+1}",
+                    "desc":"","category":"weekly","type":"구간 시책",
+                    "file":file_opts[0],"col_name":"","col_code":"","col_branch":"","col_agency":"","col_manager_code":"",
+                    "col_val":"","col_val_prev":"","col_val_curr":"",
+                    "prize_items":[{"label":"시상금","file":"","col_code_ext":"","col_eligible":"","col_prize":""}],
+                    "curr_req":100000.0,"tiers":[(500000,300),(300000,200),(200000,200),(100000,100)]
+                }); st.rerun()
+    with cd:
+        if st.button("🗑️ 모든 시상 삭제", use_container_width=True):
+            st.session_state['config']=[c for c in st.session_state['config'] if c.get('category')!='weekly']
+            with open(os.path.join(DATA_DIR,'config.json'),'w',encoding='utf-8') as f: json.dump(st.session_state['config'],f,ensure_ascii=False,cls=NumpyEncoder)
+            st.rerun()
+
+    weekly_cfgs=[(i,c) for i,c in enumerate(st.session_state['config']) if c.get('category','weekly')=='weekly']
+    if not weekly_cfgs: st.info("현재 설정된 주차/브릿지 시상이 없습니다.")
+
+    def _get_idx(val, opts):
+        return opts.index(val) if val in opts else 0
+
+    for i, cfg in weekly_cfgs:
+        if 'desc' not in cfg: cfg['desc']=""
+        st.markdown("<div class='config-box'>", unsafe_allow_html=True)
+        ct,cdl=st.columns([8,2])
+        with ct: st.markdown(f"<h3 class='config-title'>📌 {cfg['name']} 설정</h3>", unsafe_allow_html=True)
+        with cdl:
+            if st.button("삭제",key=f"del_cfg_{i}",use_container_width=True): st.session_state['config'].pop(i); st.rerun()
+        cfg['name']=st.text_input("시책명",value=cfg['name'],key=f"name_{i}")
+        cfg['desc']=st.text_area("시책 설명",value=cfg.get('desc',''),key=f"desc_{i}",height=100)
+        tidx=0
+        if "1기간" in cfg['type']: tidx=1
+        elif "2기간" in cfg['type']: tidx=2
+        cfg['type']=st.radio("시책 종류",["구간 시책","브릿지 시책 (1기간: 시상 확정)","브릿지 시책 (2기간: 당월 달성 조건)"],index=tidx,horizontal=True,key=f"type_{i}")
+        cfg['file']=st.selectbox("📂 기본 파일 (인적사항+실적)",file_opts,index=_get_idx(cfg.get('file',''),file_opts) if file_opts else 0,key=f"file_{i}")
+        cols=_get_cols_for_file(cfg['file'])
+        c1,c2=st.columns(2)
+        with c1:
+            st.info("💡 식별 컬럼 (기본 파일)")
+            cfg['col_name']=st.selectbox("성명",cols,index=_get_idx(cfg.get('col_name',''),cols),key=f"cname_{i}")
+            cfg['col_branch']=st.selectbox("지점명(조직)",cols,index=_get_idx(cfg.get('col_branch',''),cols),key=f"cbranch_{i}")
+            cfg['col_agency']=st.selectbox("대리점/지사명",cols,index=_get_idx(cfg.get('col_agency',''),cols),key=f"cagency_{i}")
+            cfg['col_code']=st.selectbox("설계사코드(사번)",cols,index=_get_idx(cfg.get('col_code',''),cols),key=f"ccode_{i}")
+            cfg['col_manager_code']=st.selectbox("지원매니저코드",cols,index=_get_idx(cfg.get('col_manager_code',cfg.get('col_manager','')),cols),key=f"cmgrcode_{i}")
+        with c2:
+            st.info("💡 실적 컬럼 (기본 파일)")
+            if "1기간" in cfg['type']:
+                cfg['col_val_prev']=st.selectbox("전월 실적",cols,index=_get_idx(cfg.get('col_val_prev',''),cols),key=f"cvalp_{i}")
+                cfg['col_val_curr']=st.selectbox("당월 실적",cols,index=_get_idx(cfg.get('col_val_curr',''),cols),key=f"cvalc_{i}")
+                cfg['curr_req']=st.number_input("다음 달 필수 가동 금액",value=float(cfg.get('curr_req',100000.0)),step=10000.0,key=f"creq1_{i}")
+                st.caption("💡 브릿지 1기간: 이번 달 구간 확보 → 다음 달 가동 시 시상 확정")
+            elif "2기간" in cfg['type']:
+                cfg['col_val_prev']=st.selectbox("전월 브릿지 실적",cols,index=_get_idx(cfg.get('col_val_prev',''),cols),key=f"cvalp2_{i}")
+                cfg['col_val_curr']=st.selectbox("당월 실적",cols,index=_get_idx(cfg.get('col_val_curr',''),cols),key=f"cvalc2_{i}")
+            else:
+                cfg['col_val']=st.selectbox("실적 수치",cols,index=_get_idx(cfg.get('col_val',''),cols),key=f"cval_{i}")
+            if "2기간" in cfg['type']:
+                cfg['curr_req']=st.number_input("이번 달 필수 가동 금액",value=float(cfg.get('curr_req',100000.0)),step=10000.0,key=f"creq2_{i}")
+                st.caption("💡 브릿지 2기간: 지난 달 구간 확정 → 이번 달 가동 시 시상 확정")
+                st.write("📈 구간 설정 (달성금액,지급률%)")
+                ts="\n".join([f"{int(t[0])},{int(t[1])}" for t in cfg.get('tiers',[])])
+                ti=st.text_area("엔터로 줄바꿈",value=ts,height=150,key=f"tier_{i}")
                 try:
-                    prize_config = st.session_state.get('prize_config', [])
-                    if prize_config:
-                        df_full = st.session_state.get('df_merged', pd.DataFrame())
-                        if not df_full.empty:
-                            # prize_config에서 사용하는 코드 열(col_code) 수집
-                            prize_code_cols = list(dict.fromkeys(
-                                c.get('col_code', '') for c in prize_config if c.get('col_code')
-                            ))
-                            
-                            for row_idx, (_, row) in enumerate(final_df.iterrows()):
-                                orig_idx = row.name
-                                if orig_idx in my_df.index:
-                                    # 각 prize config의 col_code에서 해당 행의 에이전트 코드 읽기
-                                    agent_code = ''
-                                    for pc_col in prize_code_cols:
-                                        if pc_col in my_df.columns:
-                                            raw_code = my_df.loc[orig_idx, pc_col]
-                                            if not pd.isna(raw_code) and clean_key(str(raw_code)):
-                                                agent_code = clean_key(str(raw_code))
-                                                break
-                                    # fallback: 설계사코드/사번 열 검색
-                                    if not agent_code:
-                                        for c in my_df.columns:
-                                            if '설계사코드' in c or '사번' in c or '설계사조직코드' in c:
-                                                raw_code = my_df.loc[orig_idx, c]
-                                                if not pd.isna(raw_code) and clean_key(str(raw_code)):
-                                                    agent_code = clean_key(str(raw_code))
-                                                    break
-                                    if agent_code:
-                                        results, total = calculate_prize_for_code(agent_code, prize_config, df_full)
-                                        if results:
-                                            prize_data_map[row_idx] = (results, total)
-                except Exception:
-                    pass
-                
-                table_html = render_html_table(final_df, col_groups=col_groups, prize_data_map=prize_data_map)
-                
-                components.html(table_html, height=800, scrolling=False)
-          except Exception as e:
-            st.error(f"데이터 처리 중 오류가 발생했습니다: {e}")
-            st.info("관리자 화면에서 설정을 확인해주세요.")
+                    nt=[]
+                    for line in ti.strip().split('\n'):
+                        if ',' in line: p=line.split(','); nt.append((float(p[0].strip()),float(p[1].strip())))
+                    cfg['tiers']=sorted(nt,key=lambda x:x[0],reverse=True)
+                except: st.error("형식 오류")
+            else:
+                st.markdown("**💰 시상금 항목** <small style='color:#8b95a1;'>— 항목별로 다른 파일 선택 가능</small>", unsafe_allow_html=True)
+                if 'prize_items' not in cfg:
+                    old_col=cfg.pop('col_prize','') or cfg.pop('col','')
+                    cfg['prize_items']=[{"label":"시상금","file":"","col_code_ext":"","col_eligible":"","col_prize":old_col}] if old_col else [{"label":"시상금","file":"","col_code_ext":"","col_eligible":"","col_prize":""}]
+                for _pi in cfg.get('prize_items',[]):
+                    if 'col' in _pi and 'col_prize' not in _pi: _pi['col_prize']=_pi.pop('col','')
+                    if 'col_eligible' not in _pi: _pi['col_eligible']=''
+                    if 'file' not in _pi: _pi['file']=''
+                    if 'col_code_ext' not in _pi: _pi['col_code_ext']=''
+                fowds=["(기본 파일과 동일)"]+file_opts
+                updated=[]
+                for pi_idx,pi in enumerate(cfg.get('prize_items',[])):
+                    st.markdown("<div style='background:#f8f9fa;padding:8px 10px;border-radius:8px;margin:6px 0;border:1px solid #e5e8eb;'>", unsafe_allow_html=True)
+                    pc1,pc4=st.columns([8,2])
+                    with pc1: pi['label']=st.text_input("시상명",value=pi.get('label',''),key=f"pilbl_{i}_{pi_idx}")
+                    with pc4:
+                        if st.button("🗑️",key=f"pidel_{i}_{pi_idx}",use_container_width=True):
+                            st.markdown("</div>",unsafe_allow_html=True); continue
+                    cpf=pi.get('file','') or ''
+                    pfi=fowds.index(cpf) if cpf in fowds else 0
+                    spf=st.selectbox("📂 출처 파일",fowds,index=pfi,key=f"pifile_{i}_{pi_idx}")
+                    pi['file']='' if spf=="(기본 파일과 동일)" else spf
+                    apf=pi['file'] if pi['file'] else cfg['file']
+                    pcols=_get_cols_for_file(apf); pcols_b=["(공란)"]+pcols
+                    if pi['file'] and pi['file']!=cfg['file']:
+                        pi['col_code_ext']=st.selectbox("🔗 이 파일의 사번(코드) 컬럼",pcols,index=_get_idx(pi.get('col_code_ext',''),pcols),key=f"picext_{i}_{pi_idx}")
+                    else: pi['col_code_ext']=''
+                    p2,p3=st.columns(2)
+                    with p2:
+                        ce=pi.get('col_eligible','')
+                        se=st.selectbox("지급률 컬럼 (0=미대상)",pcols_b,index=pcols_b.index(ce) if ce in pcols_b else 0,key=f"pielig_{i}_{pi_idx}")
+                        pi['col_eligible']=se if se!="(공란)" else ""
+                    with p3:
+                        cp=pi.get('col_prize','')
+                        sp=st.selectbox("예정시상금 컬럼",pcols_b,index=pcols_b.index(cp) if cp in pcols_b else 0,key=f"piprz_{i}_{pi_idx}")
+                        pi['col_prize']=sp if sp!="(공란)" else ""
+                    st.markdown("</div>",unsafe_allow_html=True)
+                    updated.append(pi)
+                cfg['prize_items']=updated
+                if st.button("➕ 시상금 항목 추가",key=f"piadd_{i}",use_container_width=True):
+                    cfg['prize_items'].append({"label":f"시상금{len(cfg['prize_items'])+1}","file":"","col_code_ext":"","col_eligible":"","col_prize":""}); st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # --- [3] 누계 ---
+    st.divider()
+    st.markdown("<h3 class='blue-title'>📈 3. 월간 누계 시상 항목 관리</h3>", unsafe_allow_html=True)
+    if st.button("➕ 신규 누계 항목 추가",type="primary",use_container_width=True,key="add_cumul"):
+        if not file_opts: st.error("⚠️ 먼저 파일 업로드 필요")
+        else:
+            st.session_state['config'].append({
+                "name":f"신규 누계 항목 {len(st.session_state['config'])+1}",
+                "desc":"","category":"cumulative","type":"누계",
+                "file":file_opts[0],"col_code":"","col_val":"",
+                "prize_items":[{"label":"시상금","file":"","col_code_ext":"","col_eligible":"","col_prize":""}]
+            }); st.rerun()
+    cumul_cfgs=[(i,c) for i,c in enumerate(st.session_state['config']) if c.get('category')=='cumulative']
+    if not cumul_cfgs: st.info("현재 설정된 누계 항목이 없습니다.")
+    for i, cfg in cumul_cfgs:
+        st.markdown("<div class='config-box-blue'>", unsafe_allow_html=True)
+        ct,cdl=st.columns([8,2])
+        with ct: st.markdown(f"<h3 class='config-title' style='color:#1e3c72;'>📘 {cfg['name']} 설정</h3>", unsafe_allow_html=True)
+        with cdl:
+            if st.button("삭제",key=f"del_cfg_{i}",use_container_width=True): st.session_state['config'].pop(i); st.rerun()
+        cfg['name']=st.text_input("누계 항목명",value=cfg['name'],key=f"name_{i}")
+        cfg['file']=st.selectbox("📂 기본 파일",file_opts,index=_get_idx(cfg.get('file',''),file_opts) if file_opts else 0,key=f"file_{i}")
+        cols=_get_cols_for_file(cfg['file'])
+        c1,c2=st.columns(2)
+        with c1:
+            cfg['col_code']=st.selectbox("설계사코드(사번)",cols,index=_get_idx(cfg.get('col_code',''),cols),key=f"ccode_{i}")
+            cfg['col_val']=st.selectbox("누계 실적 컬럼",cols,index=_get_idx(cfg.get('col_val',''),cols),key=f"cval_{i}")
+        with c2:
+            st.markdown("**💰 시상금 항목** <small style='color:#8b95a1;'>— 항목별 파일 선택 가능</small>", unsafe_allow_html=True)
+            if 'prize_items' not in cfg:
+                old_col=cfg.pop('col_prize','')
+                cfg['prize_items']=[{"label":"시상금","file":"","col_code_ext":"","col_eligible":"","col_prize":old_col}] if old_col else [{"label":"시상금","file":"","col_code_ext":"","col_eligible":"","col_prize":""}]
+            for _pi in cfg.get('prize_items',[]):
+                if 'col' in _pi and 'col_prize' not in _pi: _pi['col_prize']=_pi.pop('col','')
+                if 'col_eligible' not in _pi: _pi['col_eligible']=''
+                if 'file' not in _pi: _pi['file']=''
+                if 'col_code_ext' not in _pi: _pi['col_code_ext']=''
+            fowds=["(기본 파일과 동일)"]+file_opts
+            updated=[]
+            for pi_idx,pi in enumerate(cfg.get('prize_items',[])):
+                st.markdown("<div style='background:#f0f4ff;padding:8px 10px;border-radius:8px;margin:6px 0;border:1px solid #c7d2fe;'>", unsafe_allow_html=True)
+                pc1,pc4=st.columns([8,2])
+                with pc1: pi['label']=st.text_input("시상명",value=pi.get('label',''),key=f"cpilbl_{i}_{pi_idx}")
+                with pc4:
+                    if st.button("🗑️",key=f"cpidel_{i}_{pi_idx}",use_container_width=True):
+                        st.markdown("</div>",unsafe_allow_html=True); continue
+                cpf=pi.get('file','') or ''
+                pfi=fowds.index(cpf) if cpf in fowds else 0
+                spf=st.selectbox("📂 출처 파일",fowds,index=pfi,key=f"cpifile_{i}_{pi_idx}")
+                pi['file']='' if spf=="(기본 파일과 동일)" else spf
+                apf=pi['file'] if pi['file'] else cfg['file']
+                pcols=_get_cols_for_file(apf); pcols_b=["(공란)"]+pcols
+                if pi['file'] and pi['file']!=cfg['file']:
+                    pi['col_code_ext']=st.selectbox("🔗 이 파일의 사번(코드) 컬럼",pcols,index=_get_idx(pi.get('col_code_ext',''),pcols),key=f"cpicext_{i}_{pi_idx}")
+                else: pi['col_code_ext']=''
+                p2,p3=st.columns(2)
+                with p2:
+                    ce=pi.get('col_eligible','')
+                    se=st.selectbox("지급률 컬럼 (0=미대상)",pcols_b,index=pcols_b.index(ce) if ce in pcols_b else 0,key=f"cpielig_{i}_{pi_idx}")
+                    pi['col_eligible']=se if se!="(공란)" else ""
+                with p3:
+                    cp=pi.get('col_prize','')
+                    sp=st.selectbox("예정시상금 컬럼",pcols_b,index=pcols_b.index(cp) if cp in pcols_b else 0,key=f"cpiprz_{i}_{pi_idx}")
+                    pi['col_prize']=sp if sp!="(공란)" else ""
+                st.markdown("</div>",unsafe_allow_html=True)
+                updated.append(pi)
+            cfg['prize_items']=updated
+            if st.button("➕ 시상금 항목 추가",key=f"cpiadd_{i}",use_container_width=True):
+                cfg['prize_items'].append({"label":f"시상금{len(cfg['prize_items'])+1}","file":"","col_code_ext":"","col_eligible":"","col_prize":""}); st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # --- [4] 리플렛 ---
+    st.divider()
+    st.markdown("<h3 class='sub-title' style='margin-top:10px;'>🖼️ 4. 안내 리플렛(이미지) 등록</h3>", unsafe_allow_html=True)
+    lf=st.file_uploader("리플렛 이미지 업로드",type=['jpg','jpeg','png'])
+    if lf:
+        with open(os.path.join(DATA_DIR,"leaflet.png"),"wb") as f: f.write(lf.getbuffer())
+        st.success("✅ 리플렛 저장 완료!"); st.rerun()
+    lp=os.path.join(DATA_DIR,"leaflet.png")
+    if os.path.exists(lp):
+        st.image(lp, width=250)
+        if st.button("🗑️ 리플렛 삭제"): os.remove(lp); st.rerun()
+
+    # --- [5] 백업/복원 ---
+    st.divider()
+    st.markdown("<h3 class='sub-title' style='margin-top:10px;'>💾 5. 설정 백업 및 복원</h3>", unsafe_allow_html=True)
+    cb,cr=st.columns(2)
+    with cb:
+        if st.session_state['config']:
+            st.download_button("⬇️ 설정 백업",data=json.dumps(st.session_state['config'],ensure_ascii=False,indent=2,cls=NumpyEncoder),
+                file_name=f"config_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",mime="application/json",use_container_width=True)
+        else: st.warning("백업할 설정 없음")
+    with cr:
+        rf=st.file_uploader("백업 JSON 업로드",type=['json'],key="restore_config")
+        if rf:
+            try:
+                rd=json.loads(rf.read().decode('utf-8'))
+                if isinstance(rd,list):
+                    for c in rd:
+                        if 'category' not in c: c['category']='weekly'
+                    st.success(f"✅ 확인: 주차 {sum(1 for c in rd if c.get('category')=='weekly')}개, 누계 {sum(1 for c in rd if c.get('category')=='cumulative')}개")
+                    if st.button("🔄 복원하기",type="primary",use_container_width=True,key="do_restore"):
+                        st.session_state['config']=rd
+                        with open(os.path.join(DATA_DIR,'config.json'),'w',encoding='utf-8') as f: json.dump(rd,f,ensure_ascii=False,cls=NumpyEncoder)
+                        st.session_state['merged_data']=build_merged_data(rd,st.session_state['raw_data'])
+                        save_merged_to_disk(st.session_state['merged_data'])
+                        st.success("✅ 복원 완료!"); st.rerun()
+            except Exception as e: st.error(f"❌ 오류: {e}")
+
+    # --- 서버 반영 ---
+    if st.session_state['config']:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("✅ 모든 설정 완료 및 서버에 반영하기",type="primary",use_container_width=True):
+            with open(os.path.join(DATA_DIR,'config.json'),'w',encoding='utf-8') as f: json.dump(st.session_state['config'],f,ensure_ascii=False,cls=NumpyEncoder)
+            st.session_state['merged_data']=build_merged_data(st.session_state['config'],st.session_state['raw_data'])
+            save_merged_to_disk(st.session_state['merged_data'])
+            ext_cnt=sum(1 for cfg in st.session_state['config'] for pi in cfg.get('prize_items',[]) if pi.get('file') and pi['file']!=cfg.get('file',''))
+            st.success(f"✅ 서버 반영 완료! (데이터셋 {len(st.session_state['merged_data'])}개, 외부파일 항목 {ext_cnt}개 병합)")
+        cp=os.path.join(DATA_DIR,'config.json')
+        if os.path.exists(cp):
+            st.divider()
+            with open(cp,'r',encoding='utf-8') as f: cd=f.read()
+            st.download_button("📥 config.json 다운로드",data=cd,file_name="config.json",mime="application/json")
+
+# ==========================================
+# 🏆 사용자 모드
+# ==========================================
+else:
+    st.markdown('<div class="title-band">메리츠화재 시상 현황</div>', unsafe_allow_html=True)
+    st.markdown("<h3 class='main-title'>이름과 지점별 코드를 입력하세요.</h3>", unsafe_allow_html=True)
+    user_name=st.text_input("본인 이름",placeholder="예: 홍길동")
+    branch_code_input=st.text_input("지점별 코드",placeholder="예: 1지점은 1, 11지점은 11")
+    codes_found=set(); needs_dis=False
+    if user_name and branch_code_input:
+        for ci,cfg in enumerate(st.session_state['config']):
+            if cfg.get('category')=='cumulative': continue
+            df=_get_merged_df(ci)
+            if df is not None:
+                cn=cfg.get('col_name',''); cb=cfg.get('col_branch','')
+                sn=df[cn].fillna('').astype(str).str.strip() if cn and cn in df.columns else pd.Series()
+                if sn.empty: continue
+                nm=(sn==user_name.strip())
+                if branch_code_input.strip()=="0000": match=df[nm]
+                else:
+                    cc=branch_code_input.replace("지점","").strip()
+                    if cc:
+                        sb=df[cb].fillna('').astype(str) if cb and cb in df.columns else pd.Series()
+                        if sb.empty: continue
+                        match=df[nm & sb.str.contains(rf"(?<!\d){cc}\s*지점",regex=True)]
+                    else: match=pd.DataFrame()
+                if not match.empty and cfg.get('col_code') and cfg['col_code'] in df.columns:
+                    for ac in get_clean_series(df,cfg['col_code'])[match.index]:
+                        if ac: codes_found.add(ac)
+    codes_found={c for c in codes_found if c}
+    sel_code=None
+    if len(codes_found)>1:
+        st.warning("⚠️ 동명이인이 있습니다. 사번을 선택해주세요.")
+        sel_code=st.selectbox("사번 선택",sorted(list(codes_found))); needs_dis=True
+    if st.button("내 실적 확인하기",type="primary"):
+        if not user_name or not branch_code_input: st.warning("이름과 지점코드를 입력해주세요.")
+        elif not st.session_state['config']: st.warning("시책 데이터가 없습니다.")
+        elif not codes_found: st.error("일치하는 정보가 없습니다.")
+        else:
+            fc=sel_code if needs_dis else list(codes_found)[0]
+            cr2,tp=calculate_agent_performance(fc)
+            if cr2:
+                dn=user_name
+                for ci,cfg in enumerate(st.session_state['config']):
+                    df=_get_merged_df(ci)
+                    if df is None: continue
+                    cc=cfg.get('col_code',''); cag=cfg.get('col_agency','')
+                    if not cc or cc not in df.columns: continue
+                    if not cag or cag not in df.columns: continue
+                    m=df[get_clean_series(df,cc)==safe_str(fc)]
+                    if not m.empty:
+                        av=_clean_excel_text(str(m[cag].values[0]).strip())
+                        if av and av!='nan': dn=f"{av} {user_name}"; break
+                save_log(f"{user_name}({branch_code_input}지점)",fc,"USER_SEARCH")
+                render_ui_cards(dn,cr2,tp,show_share_text=False)
+                ulp=os.path.join(DATA_DIR,"leaflet.png")
+                if os.path.exists(ulp): st.markdown("<div style='margin-top:20px;'></div>",unsafe_allow_html=True); st.image(ulp,use_container_width=True)
+            else: st.error("해당 조건의 실적 데이터가 없습니다.")
