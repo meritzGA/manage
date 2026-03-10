@@ -1376,7 +1376,46 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
             if (w) window.frameElement.style.height = Math.min(w.scrollHeight+4, Math.round(vh*0.85))+"px";
         }
     }
-    window.addEventListener('load', function() { applyFreeze(); autoResize(); });
+    window.addEventListener('load', function() {
+        applyFreeze();
+        autoResize();
+        
+        /* ★ 명시적 이벤트 바인딩 (CSP/iframe 호환) */
+        document.querySelectorAll('[data-action="sort"]').forEach(function(th) {
+            th.addEventListener('click', function(e) { doSort(this); });
+        });
+        document.querySelectorAll('[data-action="copy"]').forEach(function(btn) {
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                doCopy(parseInt(this.getAttribute('data-idx')), this);
+            });
+        });
+        document.querySelectorAll('[data-action="prize"]').forEach(function(btn) {
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                doShowPrize(parseInt(this.getAttribute('data-idx')));
+            });
+        });
+        document.querySelectorAll('[data-action="toggle"]').forEach(function(el) {
+            el.addEventListener('click', function() {
+                this.parentElement.classList.toggle('open');
+            });
+        });
+        document.querySelectorAll('[data-action="overlay-copy"]').forEach(function(btn) {
+            btn.addEventListener('click', function() { doOverlayCopy(); });
+        });
+        document.querySelectorAll('[data-action="close-clip"]').forEach(function(btn) {
+            btn.addEventListener('click', function() { document.getElementById('clip-overlay').style.display='none'; });
+        });
+        document.querySelectorAll('[data-action="close-prize"]').forEach(function(btn) {
+            btn.addEventListener('click', function() { document.getElementById('prize-overlay').style.display='none'; });
+        });
+        document.querySelectorAll('[data-action="overlay-bg"]').forEach(function(el) {
+            el.addEventListener('click', function(e) {
+                if (e.target === this) this.style.display='none';
+            });
+        });
+    });
     window.addEventListener('resize', function() { applyFreeze(); autoResize(); });
     """.replace('__TABLE_ID__', table_id)
     
@@ -2146,6 +2185,20 @@ if menu == "관리자 화면 (설정)":
                     st.markdown("---")
                     st.markdown("#### 🚀 적용")
                     
+                    def _clear_prize_widget_keys():
+                        """시상금 설정 위젯의 캐시된 session_state 키를 모두 삭제.
+                        이래야 rerun 후 새 config 값이 위젯에 반영됨."""
+                        prefixes = (
+                            'pname_', 'ptype_', 'pccode_', 'pprev_', 'pprev2_',
+                            'pcurr_', 'pcurr2_', 'pval_', 'psave_', 'tier_',
+                            'creq2_', 'del_prize_',
+                            'wpilbl_', 'wpidel_', 'wpielig_', 'wpiprz_', 'wpiadd_',
+                            'cpilbl_', 'cpidel_', 'cpielig_', 'cpiprz_', 'cpiadd_',
+                        )
+                        keys_to_del = [k for k in st.session_state.keys() if any(k.startswith(p) for p in prefixes)]
+                        for k in keys_to_del:
+                            del st.session_state[k]
+                    
                     col_a, col_b = st.columns(2)
                     with col_a:
                         st.caption("기존 설정 삭제 → 새 설정으로 교체")
@@ -2155,6 +2208,7 @@ if menu == "관리자 화면 (설정)":
                         ):
                             st.session_state['prize_config'] = converted
                             save_data_and_config()
+                            _clear_prize_widget_keys()
                             st.session_state['_prize_applied'] = True
                             st.session_state['_prize_applied_info'] = f"{len(converted)}개 시책으로 교체 완료"
                             st.rerun()
@@ -2168,6 +2222,7 @@ if menu == "관리자 화면 (설정)":
                             prize_cfgs.extend(converted)
                             st.session_state['prize_config'] = prize_cfgs
                             save_data_and_config()
+                            _clear_prize_widget_keys()
                             st.session_state['_prize_applied'] = True
                             st.session_state['_prize_applied_info'] = f"기존 {existing_cnt}개 + 신규 {len(converted)}개 = 총 {len(prize_cfgs)}개"
                             st.rerun()
@@ -2406,11 +2461,157 @@ elif menu == "매니저 화면 (로그인)":
                 
                 table_html = render_html_table(final_df, col_groups=col_groups, prize_data_map=prize_data_map)
                 
-                # ★ 디버그: 생성된 HTML 다운로드 버튼
-                st.download_button("🔍 디버그: HTML 다운로드", table_html.encode('utf-8'), 
-                                   file_name="debug_table.html", mime="text/html", key="debug_html_dl")
-                
                 components.html(table_html, height=800, scrolling=False)
+                
+                # ══════════════════════════════════════════════════════
+                # ★ Streamlit 네이티브 복사/시상금 UI (JS 불필요)
+                # ══════════════════════════════════════════════════════
+                st.divider()
+                
+                # 설계사 목록 생성
+                name_col_for_select = None
+                for c in final_df.columns:
+                    if any(kw in c for kw in ['설계사명', '성명', '이름', '팀장명']):
+                        name_col_for_select = c
+                        break
+                
+                agent_options = []
+                for row_idx, (_, row) in enumerate(final_df.iterrows()):
+                    num = row.get('순번', row_idx + 1)
+                    name_val = str(row.get(name_col_for_select, '')) if name_col_for_select else f"설계사{row_idx+1}"
+                    if pd.isna(name_val) or not name_val.strip(): name_val = f"설계사{row_idx+1}"
+                    # 시상금 정보 추가
+                    prize_tag = ""
+                    if prize_data_map and row_idx in prize_data_map:
+                        _, pt = prize_data_map[row_idx]
+                        if pt > 0:
+                            prize_tag = f" 💰{pt:,.0f}원"
+                    agent_options.append(f"{num}. {name_val}{prize_tag}")
+                
+                sel_idx = st.selectbox(
+                    "📋 카톡 복사 / 💰 시상금 조회할 설계사 선택",
+                    range(len(agent_options)),
+                    format_func=lambda i: agent_options[i],
+                    key="native_agent_select"
+                )
+                
+                if sel_idx is not None:
+                    # 클립보드 텍스트 생성 (render_html_table 내부와 동일한 로직)
+                    columns_list = list(final_df.columns)
+                    clip_name_keywords_n = ['지사', '설계사명', '성명', '이름', '팀장명']
+                    goal_keywords_n = ['다음목표', '부족금액']
+                    clip_name_cols_n = []
+                    data_cols_n = []
+                    for c in columns_list:
+                        if c == '순번' or c == '맞춤분류': continue
+                        if any(kw in c for kw in goal_keywords_n): data_cols_n.append(c)
+                        elif any(kw in c for kw in clip_name_keywords_n) and '코드' not in c and '번호' not in c: clip_name_cols_n.append(c)
+                        else: data_cols_n.append(c)
+                    
+                    col_to_grp_n = {}
+                    for grp in col_groups:
+                        for c in grp['cols']:
+                            col_to_grp_n[c] = grp['name']
+                    
+                    sel_row = final_df.iloc[sel_idx]
+                    
+                    name_parts = []
+                    for c in clip_name_cols_n:
+                        v = str(sel_row[c]) if not pd.isna(sel_row[c]) else ''
+                        if v.strip() and v != '0': name_parts.append(v.strip())
+                    person_line = ' '.join(name_parts)
+                    if person_line and not person_line.endswith('님'): person_line += ' 팀장님'
+                    
+                    data_date_n = st.session_state.get('data_date', '')
+                    clip_footer_n = st.session_state.get('clip_footer', '')
+                    if not clip_footer_n.strip():
+                        clip_footer_n = "팀장님! 시상 부족금액 안내드려요!\n부족한 거 챙겨서 꼭 시상 많이 받아 가셨으면 좋겠습니다!\n좋은 하루 되세요!"
+                    
+                    lines = ["📋 메리츠 시상 현황 안내"]
+                    if data_date_n: lines.append(f"📅 기준일: {data_date_n}")
+                    lines.append(""); lines.append(f"👤 {person_line}"); lines.append("")
+                    
+                    current_group = None
+                    for c in data_cols_n:
+                        if '코드' in c or '번호' in c: continue
+                        val = str(sel_row[c]) if not pd.isna(sel_row[c]) else ''
+                        if not val.strip() or val == '0': continue
+                        grp = col_to_grp_n.get(c)
+                        is_goal = any(kw in c for kw in goal_keywords_n)
+                        if grp and grp != current_group:
+                            if current_group is not None: lines.append("")
+                            lines.append(f"━━ {grp} ━━"); current_group = grp
+                        elif grp is None and not is_goal and current_group is not None:
+                            lines.append(""); current_group = None
+                        if '부족금액' in c: lines.append(f"🔴 {c}: {val}")
+                        elif '다음목표' in c: lines.append(f"🎯 {c}: {val}")
+                        else: lines.append(f"  {c}: {val}")
+                    
+                    if prize_data_map and sel_idx in prize_data_map:
+                        p_results, p_total = prize_data_map[sel_idx]
+                        prize_text = format_prize_clip_text(p_results, p_total)
+                        if prize_text: lines.append(prize_text)
+                    
+                    if clip_footer_n: lines.append(""); lines.append(clip_footer_n)
+                    
+                    clip_text = '\n'.join(lines)
+                    
+                    col_copy, col_prize = st.columns(2)
+                    
+                    with col_copy:
+                        st.markdown("#### 📋 카톡 복사 문구")
+                        st.text_area(
+                            "아래 텍스트를 전체 선택(Ctrl+A) 후 복사(Ctrl+C)하세요",
+                            value=clip_text,
+                            height=300,
+                            key=f"native_clip_{sel_idx}"
+                        )
+                    
+                    with col_prize:
+                        st.markdown("#### 💰 시상금 상세")
+                        if prize_data_map and sel_idx in prize_data_map:
+                            p_results, p_total = prize_data_map[sel_idx]
+                            
+                            gugan_res = [r for r in p_results if r['category'] == 'weekly' and r['type'] == '구간']
+                            bridge_res = [r for r in p_results if r['category'] == 'weekly' and '브릿지' in r['type']]
+                            cumul_res = [r for r in p_results if r['category'] == 'cumulative']
+                            cumul_sum = sum(r['prize'] for r in cumul_res)
+                            bridge_sum = sum(r['prize'] for r in bridge_res)
+                            
+                            st.markdown(f"### 💰 총 시상금: **{p_total:,.0f}원**")
+                            if cumul_sum > 0 or bridge_sum > 0:
+                                parts = []
+                                if cumul_sum > 0: parts.append(f"누계 {cumul_sum:,.0f}")
+                                if bridge_sum > 0: parts.append(f"브릿지 {bridge_sum:,.0f}")
+                                st.caption(f"({' + '.join(parts)})")
+                            
+                            if gugan_res:
+                                st.markdown("**📌 시책 진행 (누계 포함)**")
+                                for r in gugan_res:
+                                    st.markdown(f"- {r['name']}: **{r['prize']:,.0f}원**")
+                                    for d in r.get('prize_details', []):
+                                        st.markdown(f"  - {d['label']}: {d['amount']:,.0f}원")
+                            
+                            if bridge_res:
+                                st.markdown("**🌉 브릿지 시상**")
+                                for r in bridge_res:
+                                    if r['type'] == '브릿지2':
+                                        st.markdown(f"- {r['name']}: **{r['prize']:,.0f}원** (당월 {int(r.get('curr_req',100000)//10000)}만 가동 시)")
+                                        if r.get('shortfall', 0) > 0:
+                                            st.markdown(f"  - 🚀 다음 구간까지 {r['shortfall']:,.0f}원")
+                                    else:
+                                        st.markdown(f"- {r['name']}: **{r['prize']:,.0f}원**")
+                                        for d in r.get('prize_details', []):
+                                            st.markdown(f"  - {d['label']}: {d['amount']:,.0f}원")
+                            
+                            if cumul_res:
+                                st.markdown("**📈 누계 시상**")
+                                for r in cumul_res:
+                                    st.markdown(f"- {r['name']}: **{r['prize']:,.0f}원**")
+                                    for d in r.get('prize_details', []):
+                                        st.markdown(f"  - {d['label']}: {d['amount']:,.0f}원")
+                        else:
+                            st.info("이 설계사의 시상금 데이터가 없습니다.")
           except Exception as e:
             st.error(f"데이터 처리 중 오류가 발생했습니다: {e}")
             st.info("관리자 화면에서 설정을 확인해주세요.")
