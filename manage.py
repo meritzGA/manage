@@ -413,13 +413,15 @@ def calculate_prize_for_code(target_code, prize_config, df_src):
                     "val_prev": val_prev, "val_curr": val_curr, "prize": prize, "prize_details": prize_details})
 
             elif "2기간" in p_type:
+                # ★ FIX: 두 번째 앱과 동일하게 전월 실적(col_val_prev)로 구간 매칭
+                val_prev = _safe_float_prize(_first_valid(match_df, cfg.get('col_val_prev', '')))
                 val_curr = _safe_float_prize(_first_valid(match_df, cfg.get('col_val_curr', '')))
                 
                 curr_req = float(cfg.get('curr_req', 100000.0))
                 calc_rate, tier_achieved, prize = 0, 0, 0
                 
                 for amt, rate in cfg.get('tiers', []):
-                    if val_curr >= amt:
+                    if val_prev >= amt:
                         tier_achieved = amt
                         calc_rate = rate
                         break
@@ -429,14 +431,17 @@ def calculate_prize_for_code(target_code, prize_config, df_src):
                 
                 next_tier = None
                 for amt, rate in reversed(cfg.get('tiers', [])):
-                    if val_curr < amt:
+                    if val_prev < amt:
                         next_tier = amt
                         break
-                shortfall = next_tier - val_curr if next_tier else 0
+                shortfall = next_tier - val_prev if next_tier else 0
+                
+                # 당월 가동 달성 여부
+                curr_met = val_curr >= curr_req
                 
                 results.append({"name": cfg['name'], "category": "weekly", "type": "브릿지2",
-                    "val": val_curr, "tier": tier_achieved, "rate": calc_rate, "prize": prize,
-                    "curr_req": curr_req, "next_tier": next_tier, "shortfall": shortfall})
+                    "val": val_prev, "val_curr": val_curr, "tier": tier_achieved, "rate": calc_rate, "prize": prize,
+                    "curr_req": curr_req, "next_tier": next_tier, "shortfall": shortfall, "curr_met": curr_met})
             else:
                 if not prize_details: continue
                 val = _safe_float_prize(_first_valid(match_df, cfg.get('col_val', '')))
@@ -477,6 +482,12 @@ def format_prize_clip_text(results, total):
         if r['prize'] > 0:
             if r['type'] == '브릿지2':
                 lines.append(f"  {r['name']}: {r['prize']:,.0f}원 (당월 {int(r.get('curr_req',100000)//10000)}만 가동 시)")
+                lines.append(f"    전월실적: {r.get('val',0):,.0f}원 (확보구간: {r.get('tier',0):,.0f}원)")
+                v_curr = r.get('val_curr', 0)
+                if v_curr >= r.get('curr_req', 100000):
+                    lines.append(f"    당월실적: {v_curr:,.0f}원 ✅ 달성")
+                else:
+                    lines.append(f"    당월실적: {v_curr:,.0f}원 ❌ {r.get('curr_req',100000)-v_curr:,.0f}원 부족")
                 if r.get('shortfall', 0) > 0:
                     lines.append(f"    🚀 다음 구간까지 {r['shortfall']:,.0f}원")
             else:
@@ -859,7 +870,7 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
             bar = f'<div class="grp-bar" style="background:{gc};"></div>'
         else:
             bar = ''
-        html += f'<th class="{f_cls}" data-col="{i}" data-action="sort">{bar}{col} <span class="sa">▲▼</span></th>'
+        html += f'<th class="{f_cls}" data-col="{i}" data-action="sort" onclick="doSort(this)">{bar}{col} <span class="sa">▲▼</span></th>'
     html += '<th data-col="-1" style="min-width:50px; cursor:default;">복사</th>'
     html += '</tr></thead><tbody>'
 
@@ -871,9 +882,9 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
             f_cls = fc(i)
             extra = " sc" if (col in shortfall_cols and cell_val != "") else ""
             html += f'<td class="{f_cls}{extra}" data-col="{i}">{cell_val}</td>'
-        html += f'<td data-col="-1"><button class="d-copy-btn" data-action="copy" data-idx="{row_idx}">📋</button>'
+        html += f'<td data-col="-1"><button class="d-copy-btn" data-action="copy" data-idx="{row_idx}" onclick="doCopy({row_idx},this)">📋</button>'
         if prize_data_map and row_idx in prize_data_map:
-            html += f'<button class="d-copy-btn" data-action="prize" data-idx="{row_idx}" style="margin-left:2px;">💰</button>'
+            html += f'<button class="d-copy-btn" data-action="prize" data-idx="{row_idx}" onclick="doShowPrize({row_idx})" style="margin-left:2px;">💰</button>'
         html += '</td>'
         html += '</tr>'
     html += '</tbody></table></div>'
@@ -1073,7 +1084,7 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
                 summary_items.append(f'<span style="background:#fff3e0;color:#d9232e;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700;">💰{p_display}</span>')
                 summary = ' '.join(summary_items)
         
-        html += f'<div class="m-card-head" data-action="toggle">'
+        html += f'<div class="m-card-head" data-action="toggle" onclick="this.parentElement.classList.toggle(\'open\')">'
         html += f'<span class="m-num">{num_val}</span><span class="m-name">{name_val}</span>'
         if summary:
             html += f'<span class="m-summary">{summary}</span>'
@@ -1081,9 +1092,9 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
         
         html += '<div class="m-card-body">'
         
-        html += f'<div class="m-copy-wrap"><button class="m-copy-btn" data-action="copy" data-idx="{row_idx}">📋 카톡 보내기</button>'
+        html += f'<div class="m-copy-wrap"><button class="m-copy-btn" data-action="copy" data-idx="{row_idx}" onclick="doCopy({row_idx},this)">📋 카톡 보내기</button>'
         if prize_data_map and row_idx in prize_data_map:
-            html += f'<button class="m-copy-btn" data-action="prize" data-idx="{row_idx}" style="background:#fff3e0;color:#d9232e;border:1px solid #ffd4a8;margin-top:4px;">💰 시상금 상세 조회</button>'
+            html += f'<button class="m-copy-btn" data-action="prize" data-idx="{row_idx}" onclick="doShowPrize({row_idx})" style="background:#fff3e0;color:#d9232e;border:1px solid #ffd4a8;margin-top:4px;">💰 시상금 상세 조회</button>'
         html += '</div>'
         
         for c in clip_name_cols:
@@ -1122,28 +1133,28 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
     
     # ── 복사 팝업 오버레이 ──
     html += """
-    <div id="clip-overlay" data-action="overlay-bg" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0;
+    <div id="clip-overlay" data-action="overlay-bg" onclick="if(event.target===this)this.style.display='none'" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0;
         background:rgba(0,0,0,0.5); z-index:99999; justify-content:center; align-items:center; padding:20px;">
         <div style="background:#fff; border-radius:16px; padding:20px; width:100%;
             max-width:500px; max-height:70vh; box-shadow:0 10px 40px rgba(0,0,0,0.3);">
             <h3 style="margin:0 0 10px; font-size:16px;">📋 아래 텍스트를 복사하세요</h3>
             <textarea id="clip-ta" style="width:100%; height:200px; border:1px solid #ddd; border-radius:8px;
                 padding:10px; font-size:14px; resize:none; font-family:inherit; box-sizing:border-box;"></textarea>
-            <button id="clip-copy-btn" data-action="overlay-copy" style="margin-top:10px; width:100%; padding:12px;
+            <button id="clip-copy-btn" data-action="overlay-copy" onclick="doOverlayCopy()" style="margin-top:10px; width:100%; padding:12px;
                 border:none; border-radius:10px; font-size:15px; font-weight:700; cursor:pointer;
                 background:#FEE500; color:#3C1E1E;">📋 복사하기</button>
-            <button data-action="close-clip" style="margin-top:6px;
+            <button data-action="close-clip" onclick="document.getElementById('clip-overlay').style.display='none'" style="margin-top:6px;
                 width:100%; padding:12px; border:none; border-radius:10px; font-size:15px; font-weight:700;
                 cursor:pointer; background:#f2f4f6; color:#333;">닫기</button>
         </div>
     </div>
-    <div id="prize-overlay" data-action="overlay-bg" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0;
+    <div id="prize-overlay" data-action="overlay-bg" onclick="if(event.target===this)this.style.display='none'" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0;
         background:rgba(0,0,0,0.5); z-index:99999; justify-content:center; align-items:center; padding:20px;">
         <div style="background:#fff; border-radius:16px; padding:24px; width:100%;
             max-width:450px; max-height:70vh; overflow-y:auto; box-shadow:0 10px 40px rgba(0,0,0,0.3);">
             <h3 style="margin:0 0 12px; font-size:17px;">💰 시상금 상세 조회</h3>
             <div id="prize-content"></div>
-            <button data-action="close-prize" style="margin-top:12px;
+            <button data-action="close-prize" onclick="document.getElementById('prize-overlay').style.display='none'" style="margin-top:12px;
                 width:100%; padding:12px; border:none; border-radius:10px; font-size:15px; font-weight:700;
                 cursor:pointer; background:#f2f4f6; color:#333;">닫기</button>
         </div>
