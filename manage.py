@@ -1376,46 +1376,7 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
             if (w) window.frameElement.style.height = Math.min(w.scrollHeight+4, Math.round(vh*0.85))+"px";
         }
     }
-    window.addEventListener('load', function() {
-        applyFreeze();
-        autoResize();
-        
-        /* ★ 명시적 이벤트 바인딩 (CSP/iframe 호환) */
-        document.querySelectorAll('[data-action="sort"]').forEach(function(th) {
-            th.addEventListener('click', function(e) { doSort(this); });
-        });
-        document.querySelectorAll('[data-action="copy"]').forEach(function(btn) {
-            btn.addEventListener('click', function(e) {
-                e.stopPropagation();
-                doCopy(parseInt(this.getAttribute('data-idx')), this);
-            });
-        });
-        document.querySelectorAll('[data-action="prize"]').forEach(function(btn) {
-            btn.addEventListener('click', function(e) {
-                e.stopPropagation();
-                doShowPrize(parseInt(this.getAttribute('data-idx')));
-            });
-        });
-        document.querySelectorAll('[data-action="toggle"]').forEach(function(el) {
-            el.addEventListener('click', function() {
-                this.parentElement.classList.toggle('open');
-            });
-        });
-        document.querySelectorAll('[data-action="overlay-copy"]').forEach(function(btn) {
-            btn.addEventListener('click', function() { doOverlayCopy(); });
-        });
-        document.querySelectorAll('[data-action="close-clip"]').forEach(function(btn) {
-            btn.addEventListener('click', function() { document.getElementById('clip-overlay').style.display='none'; });
-        });
-        document.querySelectorAll('[data-action="close-prize"]').forEach(function(btn) {
-            btn.addEventListener('click', function() { document.getElementById('prize-overlay').style.display='none'; });
-        });
-        document.querySelectorAll('[data-action="overlay-bg"]').forEach(function(el) {
-            el.addEventListener('click', function(e) {
-                if (e.target === this) this.style.display='none';
-            });
-        });
-    });
+    window.addEventListener('load', function() { applyFreeze(); autoResize(); });
     window.addEventListener('resize', function() { applyFreeze(); autoResize(); });
     """.replace('__TABLE_ID__', table_id)
     
@@ -2185,20 +2146,6 @@ if menu == "관리자 화면 (설정)":
                     st.markdown("---")
                     st.markdown("#### 🚀 적용")
                     
-                    def _clear_prize_widget_keys():
-                        """시상금 설정 위젯의 캐시된 session_state 키를 모두 삭제.
-                        이래야 rerun 후 새 config 값이 위젯에 반영됨."""
-                        prefixes = (
-                            'pname_', 'ptype_', 'pccode_', 'pprev_', 'pprev2_',
-                            'pcurr_', 'pcurr2_', 'pval_', 'psave_', 'tier_',
-                            'creq2_', 'del_prize_',
-                            'wpilbl_', 'wpidel_', 'wpielig_', 'wpiprz_', 'wpiadd_',
-                            'cpilbl_', 'cpidel_', 'cpielig_', 'cpiprz_', 'cpiadd_',
-                        )
-                        keys_to_del = [k for k in st.session_state.keys() if any(k.startswith(p) for p in prefixes)]
-                        for k in keys_to_del:
-                            del st.session_state[k]
-                    
                     col_a, col_b = st.columns(2)
                     with col_a:
                         st.caption("기존 설정 삭제 → 새 설정으로 교체")
@@ -2208,7 +2155,6 @@ if menu == "관리자 화면 (설정)":
                         ):
                             st.session_state['prize_config'] = converted
                             save_data_and_config()
-                            _clear_prize_widget_keys()
                             st.session_state['_prize_applied'] = True
                             st.session_state['_prize_applied_info'] = f"{len(converted)}개 시책으로 교체 완료"
                             st.rerun()
@@ -2222,7 +2168,6 @@ if menu == "관리자 화면 (설정)":
                             prize_cfgs.extend(converted)
                             st.session_state['prize_config'] = prize_cfgs
                             save_data_and_config()
-                            _clear_prize_widget_keys()
                             st.session_state['_prize_applied'] = True
                             st.session_state['_prize_applied_info'] = f"기존 {existing_cnt}개 + 신규 {len(converted)}개 = 총 {len(prize_cfgs)}개"
                             st.rerun()
