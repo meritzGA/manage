@@ -979,9 +979,8 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
         
         clip_texts.append('\n'.join(lines))
     
-    import base64 as _b64
-    clip_json_bytes = json.dumps(clip_texts, ensure_ascii=False).encode('utf-8')
-    clip_b64 = _b64.b64encode(clip_json_bytes).decode('ascii')
+    # ★ base64 대신 <script type="application/json"> 태그로 안전하게 전달
+    clip_json_str = json.dumps(clip_texts, ensure_ascii=False).replace('</','<\\/')
     
     # 💰 시상금 HTML 데이터 (행별)
     prize_htmls = []
@@ -1035,8 +1034,7 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
         else:
             prize_htmls.append('')
     
-    prize_json_bytes = json.dumps(prize_htmls, ensure_ascii=False).encode('utf-8')
-    prize_b64 = _b64.b64encode(prize_json_bytes).decode('ascii')
+    prize_json_str = json.dumps(prize_htmls, ensure_ascii=False).replace('</','<\\/')
     
     # ══════════════════════════════════════════
     # 📱 모바일 카드 뷰 생성
@@ -1153,7 +1151,13 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
         </div>
     </div>
     """
-
+    
+    # ══════════════════════════════════════════════════════════
+    # ★★★ JSON 데이터를 script 태그로 안전하게 삽입 ★★★
+    # ══════════════════════════════════════════════════════════
+    html += f'<script type="application/json" id="__clip_data">{clip_json_str}</script>'
+    html += f'<script type="application/json" id="__prize_data">{prize_json_str}</script>'
+    
     # ══════════════════════════════════════════════════════════
     # ★★★ 수정된 JavaScript — iframe 환경 안전 버전 ★★★
     # ══════════════════════════════════════════════════════════
@@ -1162,11 +1166,23 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
     var FC_DESKTOP = {freeze_count};
     var FC = FC_DESKTOP;
     
-    /* ★ FIX 1: try-catch로 초기화 — 하나 실패해도 나머지 함수 정상 작동 */
+    /* ★ FIX: JSON script 태그에서 데이터 읽기 (base64 디코딩 제거) */
     var clipData = [];
     var prizeHtml = [];
-    try {{ clipData = JSON.parse(decodeURIComponent(escape(atob("{clip_b64}")))); }} catch(e) {{ console.error('clipData init error:', e); }}
-    try {{ prizeHtml = JSON.parse(decodeURIComponent(escape(atob("{prize_b64}")))); }} catch(e) {{ console.error('prizeHtml init error:', e); }}
+    try {{ clipData = JSON.parse(document.getElementById('__clip_data').textContent); }} catch(e) {{ console.error('clipData parse error:', e); }}
+    try {{ prizeHtml = JSON.parse(document.getElementById('__prize_data').textContent); }} catch(e) {{ console.error('prizeHtml parse error:', e); }}
+    
+    /* 디버그: JS 정상 로드 확인 (2초 후 자동 삭제) */
+    (function() {{
+        var d = document.createElement('div');
+        d.id = '__js_debug';
+        d.style.cssText = 'position:fixed;top:4px;right:4px;z-index:999999;padding:4px 10px;border-radius:6px;font-size:11px;font-weight:700;';
+        d.style.background = (clipData.length > 0) ? '#22C55E' : '#f59e0b';
+        d.style.color = '#fff';
+        d.textContent = 'JS OK | clip=' + clipData.length + ' prize=' + prizeHtml.length;
+        document.body.appendChild(d);
+        setTimeout(function() {{ if(d.parentNode) d.parentNode.removeChild(d); }}, 3000);
+    }})();
     
     function isMobile() {{ return window.innerWidth <= 768; }}
     
@@ -2277,8 +2293,8 @@ elif menu == "매니저 화면 (로그인)":
                                         results, total = calculate_prize_for_code(agent_code, prize_config, df_full)
                                         if results:
                                             prize_data_map[row_idx] = (results, total)
-                except Exception:
-                    pass
+                except Exception as prize_err:
+                    st.warning(f"⚠️ 시상금 계산 중 오류: {prize_err}")
                 
                 table_html = render_html_table(final_df, col_groups=col_groups, prize_data_map=prize_data_map)
                 
