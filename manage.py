@@ -1376,7 +1376,46 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
             if (w) window.frameElement.style.height = Math.min(w.scrollHeight+4, Math.round(vh*0.85))+"px";
         }
     }
-    window.addEventListener('load', function() { applyFreeze(); autoResize(); });
+    window.addEventListener('load', function() {
+        applyFreeze();
+        autoResize();
+        
+        /* ★ 명시적 이벤트 바인딩 (CSP/iframe 호환) */
+        document.querySelectorAll('[data-action="sort"]').forEach(function(th) {
+            th.addEventListener('click', function(e) { doSort(this); });
+        });
+        document.querySelectorAll('[data-action="copy"]').forEach(function(btn) {
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                doCopy(parseInt(this.getAttribute('data-idx')), this);
+            });
+        });
+        document.querySelectorAll('[data-action="prize"]').forEach(function(btn) {
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                doShowPrize(parseInt(this.getAttribute('data-idx')));
+            });
+        });
+        document.querySelectorAll('[data-action="toggle"]').forEach(function(el) {
+            el.addEventListener('click', function() {
+                this.parentElement.classList.toggle('open');
+            });
+        });
+        document.querySelectorAll('[data-action="overlay-copy"]').forEach(function(btn) {
+            btn.addEventListener('click', function() { doOverlayCopy(); });
+        });
+        document.querySelectorAll('[data-action="close-clip"]').forEach(function(btn) {
+            btn.addEventListener('click', function() { document.getElementById('clip-overlay').style.display='none'; });
+        });
+        document.querySelectorAll('[data-action="close-prize"]').forEach(function(btn) {
+            btn.addEventListener('click', function() { document.getElementById('prize-overlay').style.display='none'; });
+        });
+        document.querySelectorAll('[data-action="overlay-bg"]').forEach(function(el) {
+            el.addEventListener('click', function(e) {
+                if (e.target === this) this.style.display='none';
+            });
+        });
+    });
     window.addEventListener('resize', function() { applyFreeze(); autoResize(); });
     """.replace('__TABLE_ID__', table_id)
     
