@@ -870,7 +870,7 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
             bar = f'<div class="grp-bar" style="background:{gc};"></div>'
         else:
             bar = ''
-        html += f'<th class="{f_cls}" data-col="{i}" data-action="sort" onclick="doSort(this)">{bar}{col} <span class="sa">▲▼</span></th>'
+        html += f'<th class="{f_cls}" data-col="{i}" onclick="sortTable(this)">{bar}{col} <span class="sa">▲▼</span></th>'
     html += '<th data-col="-1" style="min-width:50px; cursor:default;">복사</th>'
     html += '</tr></thead><tbody>'
 
@@ -882,9 +882,9 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
             f_cls = fc(i)
             extra = " sc" if (col in shortfall_cols and cell_val != "") else ""
             html += f'<td class="{f_cls}{extra}" data-col="{i}">{cell_val}</td>'
-        html += f'<td data-col="-1"><button class="d-copy-btn" data-action="copy" data-idx="{row_idx}" onclick="doCopy({row_idx},this)">📋</button>'
+        html += f'<td data-col="-1"><button class="d-copy-btn" onclick="copyClip({row_idx}, this, event)">📋</button>'
         if prize_data_map and row_idx in prize_data_map:
-            html += f'<button class="d-copy-btn" data-action="prize" data-idx="{row_idx}" onclick="doShowPrize({row_idx})" style="margin-left:2px;">💰</button>'
+            html += f'<button class="d-copy-btn" onclick="showPrize({row_idx}, event)" style="margin-left:2px;">💰</button>'
         html += '</td>'
         html += '</tr>'
     html += '</tbody></table></div>'
@@ -990,8 +990,9 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
         
         clip_texts.append('\n'.join(lines))
     
-    # ★ ensure_ascii=True로 ASCII-only JSON 생성 (JS 변수 직접 대입용)
-    clip_json_safe = json.dumps(clip_texts, ensure_ascii=True).replace('</','<\\/')
+    import base64 as _b64
+    clip_json_bytes = json.dumps(clip_texts, ensure_ascii=False).encode('utf-8')
+    clip_b64 = _b64.b64encode(clip_json_bytes).decode('ascii')
     
     # 💰 시상금 HTML 데이터 (행별)
     prize_htmls = []
@@ -1045,7 +1046,8 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
         else:
             prize_htmls.append('')
     
-    prize_json_safe = json.dumps(prize_htmls, ensure_ascii=True).replace('</','<\\/')
+    prize_json_bytes = json.dumps(prize_htmls, ensure_ascii=False).encode('utf-8')
+    prize_b64 = _b64.b64encode(prize_json_bytes).decode('ascii')
     
     # ══════════════════════════════════════════
     # 📱 모바일 카드 뷰 생성
@@ -1084,7 +1086,7 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
                 summary_items.append(f'<span style="background:#fff3e0;color:#d9232e;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700;">💰{p_display}</span>')
                 summary = ' '.join(summary_items)
         
-        html += f'<div class="m-card-head" data-action="toggle" onclick="this.parentElement.classList.toggle(\'open\')">'
+        html += f'<div class="m-card-head" onclick="this.parentElement.classList.toggle(\'open\')">'
         html += f'<span class="m-num">{num_val}</span><span class="m-name">{name_val}</span>'
         if summary:
             html += f'<span class="m-summary">{summary}</span>'
@@ -1092,9 +1094,9 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
         
         html += '<div class="m-card-body">'
         
-        html += f'<div class="m-copy-wrap"><button class="m-copy-btn" data-action="copy" data-idx="{row_idx}" onclick="doCopy({row_idx},this)">📋 카톡 보내기</button>'
+        html += f'<div class="m-copy-wrap"><button class="m-copy-btn" onclick="copyClip({row_idx}, this, event)">📋 카톡 보내기</button>'
         if prize_data_map and row_idx in prize_data_map:
-            html += f'<button class="m-copy-btn" data-action="prize" data-idx="{row_idx}" onclick="doShowPrize({row_idx})" style="background:#fff3e0;color:#d9232e;border:1px solid #ffd4a8;margin-top:4px;">💰 시상금 상세 조회</button>'
+            html += f'<button class="m-copy-btn" onclick="showPrize({row_idx}, event)" style="background:#fff3e0;color:#d9232e;border:1px solid #ffd4a8;margin-top:4px;">💰 시상금 상세 조회</button>'
         html += '</div>'
         
         for c in clip_name_cols:
@@ -1133,295 +1135,202 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
     
     # ── 복사 팝업 오버레이 ──
     html += """
-    <div id="clip-overlay" data-action="overlay-bg" onclick="if(event.target===this)this.style.display='none'" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0;
-        background:rgba(0,0,0,0.5); z-index:99999; justify-content:center; align-items:center; padding:20px;">
+    <div id="clip-overlay" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0;
+        background:rgba(0,0,0,0.5); z-index:99999; justify-content:center; align-items:center; padding:20px;"
+        onclick="if(event.target===this){this.style.display='none';}">
         <div style="background:#fff; border-radius:16px; padding:20px; width:100%;
             max-width:500px; max-height:70vh; box-shadow:0 10px 40px rgba(0,0,0,0.3);">
             <h3 style="margin:0 0 10px; font-size:16px;">📋 아래 텍스트를 복사하세요</h3>
             <textarea id="clip-ta" style="width:100%; height:200px; border:1px solid #ddd; border-radius:8px;
                 padding:10px; font-size:14px; resize:none; font-family:inherit; box-sizing:border-box;"></textarea>
-            <button id="clip-copy-btn" data-action="overlay-copy" onclick="doOverlayCopy()" style="margin-top:10px; width:100%; padding:12px;
+            <button id="clip-copy-btn" onclick="doCopyOverlay()" style="margin-top:10px; width:100%; padding:12px;
                 border:none; border-radius:10px; font-size:15px; font-weight:700; cursor:pointer;
                 background:#FEE500; color:#3C1E1E;">📋 복사하기</button>
-            <button data-action="close-clip" onclick="document.getElementById('clip-overlay').style.display='none'" style="margin-top:6px;
+            <button onclick="document.getElementById('clip-overlay').style.display='none'" style="margin-top:6px;
                 width:100%; padding:12px; border:none; border-radius:10px; font-size:15px; font-weight:700;
                 cursor:pointer; background:#f2f4f6; color:#333;">닫기</button>
         </div>
     </div>
-    <div id="prize-overlay" data-action="overlay-bg" onclick="if(event.target===this)this.style.display='none'" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0;
-        background:rgba(0,0,0,0.5); z-index:99999; justify-content:center; align-items:center; padding:20px;">
+    <div id="prize-overlay" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0;
+        background:rgba(0,0,0,0.5); z-index:99999; justify-content:center; align-items:center; padding:20px;"
+        onclick="if(event.target===this){this.style.display='none';}">
         <div style="background:#fff; border-radius:16px; padding:24px; width:100%;
             max-width:450px; max-height:70vh; overflow-y:auto; box-shadow:0 10px 40px rgba(0,0,0,0.3);">
             <h3 style="margin:0 0 12px; font-size:17px;">💰 시상금 상세 조회</h3>
             <div id="prize-content"></div>
-            <button data-action="close-prize" onclick="document.getElementById('prize-overlay').style.display='none'" style="margin-top:12px;
+            <button onclick="document.getElementById('prize-overlay').style.display='none'" style="margin-top:12px;
                 width:100%; padding:12px; border:none; border-radius:10px; font-size:15px; font-weight:700;
                 cursor:pointer; background:#f2f4f6; color:#333;">닫기</button>
         </div>
     </div>
     """
-    
-    # ══════════════════════════════════════════════════════════
-    # ★★★ JS 데이터: f-string 아닌 문자열 연결로 안전하게 삽입 ★★★
-    # ══════════════════════════════════════════════════════════
-    html += '<script>\n'
-    html += 'var clipData = ' + clip_json_safe + ';\n'
-    html += 'var prizeHtml = ' + prize_json_safe + ';\n'
-    html += 'var FC_DESKTOP = ' + str(freeze_count) + ';\n'
-    html += 'var FC = FC_DESKTOP;\n'
-    
-    # ★ 나머지 함수는 table_id만 필요하므로 .replace()로 삽입
-    js_functions = r"""
-    /* ★ 에러 가시화: 모든 JS 에러를 화면에 표시 */
-    window.onerror = function(msg, url, line) {
-        var d = document.createElement('div');
-        d.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:999999;padding:8px;background:#dc2626;color:#fff;font-size:12px;';
-        d.textContent = 'JS ERROR: ' + msg + ' (line ' + line + ')';
-        document.body.appendChild(d);
-    };
-    
-    /* 디버그 배지: 5초 후 삭제 */
-    (function() {
-        var d = document.createElement('div');
-        d.style.cssText = 'position:fixed;top:4px;right:4px;z-index:999999;padding:6px 12px;border-radius:6px;font-size:12px;font-weight:700;';
-        d.style.background = (clipData.length > 0) ? '#22C55E' : '#f59e0b';
-        d.style.color = '#fff';
-        d.textContent = 'JS OK | clip=' + clipData.length + ' prize=' + prizeHtml.filter(function(x){return x!=='';}).length;
-        document.body.appendChild(d);
-        setTimeout(function() { if(d.parentNode) d.parentNode.removeChild(d); }, 5000);
-    })();
-    
-    function isMobile() { return window.innerWidth <= 768; }
 
-    /* ═══════════════════════════════════════════
-       ★ 이벤트 위임: 모든 클릭을 document에서 처리
-       ═══════════════════════════════════════════ */
-    document.addEventListener('click', function(e) {
-        var target = e.target;
-        var actionEl = target.closest('[data-action]');
-        if (!actionEl) return;
-        
-        var action = actionEl.getAttribute('data-action');
-        var idx = parseInt(actionEl.getAttribute('data-idx'));
-        
-        switch(action) {
-            case 'copy':
-                e.stopPropagation();
-                doCopy(idx, actionEl);
-                break;
-            case 'prize':
-                e.stopPropagation();
-                doShowPrize(idx);
-                break;
-            case 'sort':
-                doSort(actionEl);
-                break;
-            case 'toggle':
-                actionEl.parentElement.classList.toggle('open');
-                break;
-            case 'overlay-bg':
-                if (e.target === actionEl) actionEl.style.display = 'none';
-                break;
-            case 'overlay-copy':
-                doOverlayCopy();
-                break;
-            case 'close-clip':
-                document.getElementById('clip-overlay').style.display = 'none';
-                break;
-            case 'close-prize':
-                document.getElementById('prize-overlay').style.display = 'none';
-                break;
-        }
-    });
+    html += f"""
+    <script>
+    var FC_DESKTOP = {freeze_count};
+    var FC = FC_DESKTOP;
+    var clipData = JSON.parse(decodeURIComponent(escape(atob("{clip_b64}"))));
+    var prizeHtml = JSON.parse(decodeURIComponent(escape(atob("{prize_b64}"))));
     
-    function doCopy(idx, btn) {
-        var text = clipData[idx] || '';
+    function isMobile() {{ return window.innerWidth <= 768; }}
+    
+    function copyClip(idx, btn, evt) {{
+        evt.stopPropagation();
+        var text = clipData[idx];
         if (!text) return;
-        
-        if (isMobile()) {
-            if (navigator.share) {
-                try {
-                    navigator.share({ text: text }).then(function() {
-                        showCopied(btn);
-                    }).catch(function() { showOverlay(text); });
-                    return;
-                } catch(e) {}
-            }
-            showOverlay(text);
+        if (isMobile() && navigator.share) {{
+            navigator.share({{ text: text }}).then(function() {{
+                showCopied(btn);
+            }}).catch(function() {{
+                fallbackCopy(text, btn);
+            }});
             return;
-        }
-        
+        }}
+        fallbackCopy(text, btn);
+    }}
+    function fallbackCopy(text, btn) {{
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        ta.setSelectionRange(0, 999999);
         var ok = false;
-        try {
-            var ta = document.createElement('textarea');
-            ta.value = text;
-            ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
-            document.body.appendChild(ta);
-            ta.focus(); ta.select(); ta.setSelectionRange(0, 999999);
-            try { ok = document.execCommand('copy'); } catch(e) {}
-            document.body.removeChild(ta);
-        } catch(e) {}
-        if (ok) { showCopied(btn); return; }
-        
-        try {
-            if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(text).then(function() {
-                    showCopied(btn);
-                }).catch(function() { showOverlay(text); });
-                return;
-            }
-        } catch(e) {}
+        try {{ ok = document.execCommand('copy'); }} catch(e) {{}}
+        document.body.removeChild(ta);
+        if (ok) {{
+            showCopied(btn);
+            return;
+        }}
+        if (navigator.clipboard && navigator.clipboard.writeText) {{
+            navigator.clipboard.writeText(text).then(function() {{
+                showCopied(btn);
+            }}).catch(function() {{
+                showOverlay(text);
+            }});
+            return;
+        }}
         showOverlay(text);
-    }
-    
-    function showOverlay(text) {
+    }}
+    function showOverlay(text) {{
         var ov = document.getElementById('clip-overlay');
         var ta = document.getElementById('clip-ta');
-        if (!ov || !ta) return;
-        ta.readOnly = false; ta.value = text; ov.style.display = 'flex';
-        setTimeout(function() { ta.focus(); ta.select(); try { ta.setSelectionRange(0, 999999); } catch(e) {} }, 150);
-    }
-    
-    function doOverlayCopy() {
-        var ta = document.getElementById('clip-ta');
-        var btn = document.getElementById('clip-copy-btn');
-        if (!ta || !btn) return;
-        try {
-            if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(ta.value).then(function() { copyDone(btn,true); }).catch(function() { execFallback(ta,btn); });
-                return;
-            }
-        } catch(e) {}
-        execFallback(ta, btn);
-    }
-    function execFallback(ta, btn) {
-        var ok = false;
-        try { ta.readOnly=false; ta.focus(); ta.select(); ta.setSelectionRange(0,999999); try{ok=document.execCommand('copy');}catch(e){} } catch(e) {}
-        copyDone(btn, ok);
-    }
-    function copyDone(btn, ok) {
-        if (ok) {
-            btn.textContent = '\u2705 \ubcf5\uc0ac \uc644\ub8cc!';
-            btn.style.background = '#22C55E'; btn.style.color = '#fff';
-            setTimeout(function() { document.getElementById('clip-overlay').style.display='none'; btn.textContent='\uD83D\uDCCB \ubcf5\uc0ac\ud558\uae30'; btn.style.background='#FEE500'; btn.style.color='#3C1E1E'; }, 1200);
-        } else {
-            btn.textContent = '\u26A0 Ctrl+C'; btn.style.background = '#f59e0b'; btn.style.color = '#fff';
-            ta.readOnly = false; ta.focus(); ta.select();
-        }
-    }
-    function showCopied(btn) {
-        if (!btn) return;
-        var orig = btn.innerHTML; btn.classList.add('copied'); btn.innerHTML = '\u2705';
-        setTimeout(function() { btn.classList.remove('copied'); btn.innerHTML = orig; }, 1500);
-    }
-    
-    function doShowPrize(idx) {
-        var h = (prizeHtml && prizeHtml[idx]) || '';
-        var el = document.getElementById('prize-content');
-        var ov = document.getElementById('prize-overlay');
-        if (!el || !ov) return;
-        el.innerHTML = h || '<p style="color:#888;text-align:center;padding:20px;">\uc2dc\uc0c1\uae08 \ub370\uc774\ud130 \uc5c6\uc74c</p>';
+        ta.value = text;
         ov.style.display = 'flex';
-    }
-
-    var ss = {};
-    function doSort(th) {
-        var t = document.getElementById("__TABLE_ID__");
+        setTimeout(function() {{ ta.focus(); ta.select(); ta.setSelectionRange(0, 999999); }}, 100);
+    }}
+    function doCopyOverlay() {{
+        var ta = document.getElementById('clip-ta');
+        var text = ta.value;
+        var tmp = document.createElement('textarea');
+        tmp.value = text;
+        tmp.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
+        document.body.appendChild(tmp);
+        tmp.focus();
+        tmp.select();
+        tmp.setSelectionRange(0, 999999);
+        var ok = false;
+        try {{ ok = document.execCommand('copy'); }} catch(e) {{}}
+        document.body.removeChild(tmp);
+        if (!ok) {{
+            ta.readOnly = false;
+            ta.focus(); ta.select(); ta.setSelectionRange(0, 999999);
+            try {{ ok = document.execCommand('copy'); }} catch(e2) {{}}
+            ta.readOnly = true;
+        }}
+        var btn = document.getElementById('clip-copy-btn');
+        btn.textContent = ok ? '✅ 복사 완료!' : '⚠️ 텍스트를 직접 선택 후 Ctrl+C';
+        btn.style.background = ok ? '#22C55E' : '#f59e0b'; btn.style.color = '#fff';
+        if (ok) {{
+            setTimeout(function() {{
+                document.getElementById('clip-overlay').style.display = 'none';
+                btn.textContent = '📋 복사하기';
+                btn.style.background = '#FEE500'; btn.style.color = '#3C1E1E';
+            }}, 1200);
+        }} else {{
+            ta.readOnly = false;
+            ta.focus(); ta.select(); ta.setSelectionRange(0, 999999);
+        }}
+    }}
+    function showCopied(btn) {{
+        var orig = btn.innerHTML;
+        btn.classList.add('copied');
+        btn.innerHTML = '✅ 복사 완료!';
+        setTimeout(function() {{ btn.classList.remove('copied'); btn.innerHTML = orig; }}, 1500);
+    }}
+    function showPrize(idx, evt) {{
+        if (evt) evt.stopPropagation();
+        var h = prizeHtml[idx];
+        if (!h) {{ alert('시상금 데이터가 없습니다.'); return; }}
+        document.getElementById('prize-content').innerHTML = h;
+        document.getElementById('prize-overlay').style.display = 'flex';
+    }}
+    
+    function applyFreeze() {{
+        var t = document.getElementById("{table_id}");
+        FC = isMobile() ? Math.min(FC_DESKTOP, 2) : FC_DESKTOP;
+        if (!t || FC === 0) return;
+        var fr = t.querySelector("tbody tr");
+        if (!fr) return;
+        var lp = [], cl = 0;
+        for (var i = 0; i < FC; i++) {{ lp.push(cl); if (fr.cells[i]) cl += fr.cells[i].offsetWidth; }}
+        t.querySelectorAll(".col-freeze").forEach(function(c) {{
+            var idx = parseInt(c.getAttribute("data-col"));
+            if (!isNaN(idx) && idx < FC) {{
+                c.style.left = lp[idx] + "px";
+                c.style.position = "sticky";
+                c.style.zIndex = c.tagName === "TH" ? "3" : "1";
+            }} else if (!isNaN(idx) && idx >= FC) {{
+                c.style.position = "static";
+                c.style.boxShadow = "none";
+            }}
+        }});
+    }}
+    function autoResize() {{
+        if (!window.frameElement) return;
+        var vh = window.parent.innerHeight || 900;
+        if (isMobile()) {{
+            var mv = document.querySelector('.mobile-view');
+            if (mv) window.frameElement.style.height = Math.min(mv.scrollHeight + 20, Math.round(vh * 0.80)) + "px";
+        }} else {{
+            var w = document.getElementById("wrap_{table_id}");
+            if (w) window.frameElement.style.height = Math.min(w.scrollHeight + 4, Math.round(vh * 0.85)) + "px";
+        }}
+    }}
+    window.addEventListener('load', function() {{ applyFreeze(); autoResize(); }});
+    window.addEventListener('resize', function() {{ applyFreeze(); autoResize(); }});
+    var ss = {{}};
+    function sortTable(th) {{
+        var t = document.getElementById("{table_id}");
         var tb = t.querySelector("tbody");
         var rows = Array.from(tb.querySelectorAll("tr"));
         var ci = parseInt(th.getAttribute("data-col"));
         if (isNaN(ci)) return;
-        var asc = ss[ci] !== true; ss = {}; ss[ci] = asc;
-        rows.sort(function(a, b) {
+        var asc = ss[ci] !== true; ss = {{}}; ss[ci] = asc;
+        rows.sort(function(a, b) {{
             var aT = a.cells[ci].textContent.trim(), bT = b.cells[ci].textContent.trim();
             var aN = parseFloat(aT.replace(/,/g,"")), bN = parseFloat(bT.replace(/,/g,""));
             if (aT === "" && bT === "") return 0;
             if (aT === "") return 1; if (bT === "") return -1;
             if (!isNaN(aN) && !isNaN(bN)) return asc ? aN - bN : bN - aN;
             return asc ? aT.localeCompare(bT,'ko') : bT.localeCompare(aT,'ko');
-        });
-        rows.forEach(function(r) { tb.appendChild(r); });
-        tb.querySelectorAll("tr").forEach(function(r, idx) { if (r.cells[0]) r.cells[0].textContent = idx + 1; });
-        t.querySelectorAll("thead th").forEach(function(h) {
+        }});
+        rows.forEach(function(r) {{ tb.appendChild(r); }});
+        var allRows = tb.querySelectorAll("tr");
+        allRows.forEach(function(r, idx) {{ if (r.cells[0]) r.cells[0].textContent = idx + 1; }});
+        t.querySelectorAll("thead th").forEach(function(h) {{
             var ar = h.querySelector(".sa"); if (!ar) return;
             var hi = parseInt(h.getAttribute("data-col"));
-            if (hi === ci) { ar.textContent = asc ? "\u25B2" : "\u25BC"; ar.className = "sa active"; }
-            else { ar.textContent = "\u25B2\u25BC"; ar.className = "sa"; }
-        });
+            if (hi === ci) {{ ar.textContent = asc ? "▲" : "▼"; ar.className = "sa active"; }}
+            else {{ ar.textContent = "▲▼"; ar.className = "sa"; }}
+        }});
         setTimeout(autoResize, 50);
-    }
-    
-    function applyFreeze() {
-        var t = document.getElementById("__TABLE_ID__");
-        FC = isMobile() ? Math.min(FC_DESKTOP, 2) : FC_DESKTOP;
-        if (!t || FC === 0) return;
-        var fr = t.querySelector("tbody tr");
-        if (!fr) return;
-        var lp = [], cl = 0;
-        for (var i = 0; i < FC; i++) { lp.push(cl); if (fr.cells[i]) cl += fr.cells[i].offsetWidth; }
-        t.querySelectorAll(".col-freeze").forEach(function(c) {
-            var idx = parseInt(c.getAttribute("data-col"));
-            if (!isNaN(idx) && idx < FC) { c.style.left = lp[idx]+"px"; c.style.position = "sticky"; c.style.zIndex = c.tagName==="TH"?"3":"1"; }
-            else if (!isNaN(idx) && idx >= FC) { c.style.position = "static"; c.style.boxShadow = "none"; }
-        });
-    }
-    function autoResize() {
-        if (!window.frameElement) return;
-        var vh = window.parent.innerHeight || 900;
-        if (isMobile()) {
-            var mv = document.querySelector('.mobile-view');
-            if (mv) window.frameElement.style.height = Math.min(mv.scrollHeight+20, Math.round(vh*0.80))+"px";
-        } else {
-            var w = document.getElementById("wrap___TABLE_ID__");
-            if (w) window.frameElement.style.height = Math.min(w.scrollHeight+4, Math.round(vh*0.85))+"px";
-        }
-    }
-    window.addEventListener('load', function() {
-        applyFreeze();
-        autoResize();
-        
-        /* ★ 명시적 이벤트 바인딩 (CSP/iframe 호환) */
-        document.querySelectorAll('[data-action="sort"]').forEach(function(th) {
-            th.addEventListener('click', function(e) { doSort(this); });
-        });
-        document.querySelectorAll('[data-action="copy"]').forEach(function(btn) {
-            btn.addEventListener('click', function(e) {
-                e.stopPropagation();
-                doCopy(parseInt(this.getAttribute('data-idx')), this);
-            });
-        });
-        document.querySelectorAll('[data-action="prize"]').forEach(function(btn) {
-            btn.addEventListener('click', function(e) {
-                e.stopPropagation();
-                doShowPrize(parseInt(this.getAttribute('data-idx')));
-            });
-        });
-        document.querySelectorAll('[data-action="toggle"]').forEach(function(el) {
-            el.addEventListener('click', function() {
-                this.parentElement.classList.toggle('open');
-            });
-        });
-        document.querySelectorAll('[data-action="overlay-copy"]').forEach(function(btn) {
-            btn.addEventListener('click', function() { doOverlayCopy(); });
-        });
-        document.querySelectorAll('[data-action="close-clip"]').forEach(function(btn) {
-            btn.addEventListener('click', function() { document.getElementById('clip-overlay').style.display='none'; });
-        });
-        document.querySelectorAll('[data-action="close-prize"]').forEach(function(btn) {
-            btn.addEventListener('click', function() { document.getElementById('prize-overlay').style.display='none'; });
-        });
-        document.querySelectorAll('[data-action="overlay-bg"]').forEach(function(el) {
-            el.addEventListener('click', function(e) {
-                if (e.target === this) this.style.display='none';
-            });
-        });
-    });
-    window.addEventListener('resize', function() { applyFreeze(); autoResize(); });
-    """.replace('__TABLE_ID__', table_id)
-    
-    html += js_functions
-    html += '\n</script>\n'
+    }}
+    </script>
+    """
     return html
+
 
 
 # ==========================================
@@ -2462,156 +2371,7 @@ elif menu == "매니저 화면 (로그인)":
                 table_html = render_html_table(final_df, col_groups=col_groups, prize_data_map=prize_data_map)
                 
                 components.html(table_html, height=800, scrolling=False)
-                
-                # ══════════════════════════════════════════════════════
-                # ★ Streamlit 네이티브 복사/시상금 UI (JS 불필요)
-                # ══════════════════════════════════════════════════════
-                st.divider()
-                
-                # 설계사 목록 생성
-                name_col_for_select = None
-                for c in final_df.columns:
-                    if any(kw in c for kw in ['설계사명', '성명', '이름', '팀장명']):
-                        name_col_for_select = c
-                        break
-                
-                agent_options = []
-                for row_idx, (_, row) in enumerate(final_df.iterrows()):
-                    num = row.get('순번', row_idx + 1)
-                    name_val = str(row.get(name_col_for_select, '')) if name_col_for_select else f"설계사{row_idx+1}"
-                    if pd.isna(name_val) or not name_val.strip(): name_val = f"설계사{row_idx+1}"
-                    # 시상금 정보 추가
-                    prize_tag = ""
-                    if prize_data_map and row_idx in prize_data_map:
-                        _, pt = prize_data_map[row_idx]
-                        if pt > 0:
-                            prize_tag = f" 💰{pt:,.0f}원"
-                    agent_options.append(f"{num}. {name_val}{prize_tag}")
-                
-                sel_idx = st.selectbox(
-                    "📋 카톡 복사 / 💰 시상금 조회할 설계사 선택",
-                    range(len(agent_options)),
-                    format_func=lambda i: agent_options[i],
-                    key="native_agent_select"
-                )
-                
-                if sel_idx is not None:
-                    # 클립보드 텍스트 생성 (render_html_table 내부와 동일한 로직)
-                    columns_list = list(final_df.columns)
-                    clip_name_keywords_n = ['지사', '설계사명', '성명', '이름', '팀장명']
-                    goal_keywords_n = ['다음목표', '부족금액']
-                    clip_name_cols_n = []
-                    data_cols_n = []
-                    for c in columns_list:
-                        if c == '순번' or c == '맞춤분류': continue
-                        if any(kw in c for kw in goal_keywords_n): data_cols_n.append(c)
-                        elif any(kw in c for kw in clip_name_keywords_n) and '코드' not in c and '번호' not in c: clip_name_cols_n.append(c)
-                        else: data_cols_n.append(c)
-                    
-                    col_to_grp_n = {}
-                    for grp in col_groups:
-                        for c in grp['cols']:
-                            col_to_grp_n[c] = grp['name']
-                    
-                    sel_row = final_df.iloc[sel_idx]
-                    
-                    name_parts = []
-                    for c in clip_name_cols_n:
-                        v = str(sel_row[c]) if not pd.isna(sel_row[c]) else ''
-                        if v.strip() and v != '0': name_parts.append(v.strip())
-                    person_line = ' '.join(name_parts)
-                    if person_line and not person_line.endswith('님'): person_line += ' 팀장님'
-                    
-                    data_date_n = st.session_state.get('data_date', '')
-                    clip_footer_n = st.session_state.get('clip_footer', '')
-                    if not clip_footer_n.strip():
-                        clip_footer_n = "팀장님! 시상 부족금액 안내드려요!\n부족한 거 챙겨서 꼭 시상 많이 받아 가셨으면 좋겠습니다!\n좋은 하루 되세요!"
-                    
-                    lines = ["📋 메리츠 시상 현황 안내"]
-                    if data_date_n: lines.append(f"📅 기준일: {data_date_n}")
-                    lines.append(""); lines.append(f"👤 {person_line}"); lines.append("")
-                    
-                    current_group = None
-                    for c in data_cols_n:
-                        if '코드' in c or '번호' in c: continue
-                        val = str(sel_row[c]) if not pd.isna(sel_row[c]) else ''
-                        if not val.strip() or val == '0': continue
-                        grp = col_to_grp_n.get(c)
-                        is_goal = any(kw in c for kw in goal_keywords_n)
-                        if grp and grp != current_group:
-                            if current_group is not None: lines.append("")
-                            lines.append(f"━━ {grp} ━━"); current_group = grp
-                        elif grp is None and not is_goal and current_group is not None:
-                            lines.append(""); current_group = None
-                        if '부족금액' in c: lines.append(f"🔴 {c}: {val}")
-                        elif '다음목표' in c: lines.append(f"🎯 {c}: {val}")
-                        else: lines.append(f"  {c}: {val}")
-                    
-                    if prize_data_map and sel_idx in prize_data_map:
-                        p_results, p_total = prize_data_map[sel_idx]
-                        prize_text = format_prize_clip_text(p_results, p_total)
-                        if prize_text: lines.append(prize_text)
-                    
-                    if clip_footer_n: lines.append(""); lines.append(clip_footer_n)
-                    
-                    clip_text = '\n'.join(lines)
-                    
-                    col_copy, col_prize = st.columns(2)
-                    
-                    with col_copy:
-                        st.markdown("#### 📋 카톡 복사 문구")
-                        st.text_area(
-                            "아래 텍스트를 전체 선택(Ctrl+A) 후 복사(Ctrl+C)하세요",
-                            value=clip_text,
-                            height=300,
-                            key=f"native_clip_{sel_idx}"
-                        )
-                    
-                    with col_prize:
-                        st.markdown("#### 💰 시상금 상세")
-                        if prize_data_map and sel_idx in prize_data_map:
-                            p_results, p_total = prize_data_map[sel_idx]
-                            
-                            gugan_res = [r for r in p_results if r['category'] == 'weekly' and r['type'] == '구간']
-                            bridge_res = [r for r in p_results if r['category'] == 'weekly' and '브릿지' in r['type']]
-                            cumul_res = [r for r in p_results if r['category'] == 'cumulative']
-                            cumul_sum = sum(r['prize'] for r in cumul_res)
-                            bridge_sum = sum(r['prize'] for r in bridge_res)
-                            
-                            st.markdown(f"### 💰 총 시상금: **{p_total:,.0f}원**")
-                            if cumul_sum > 0 or bridge_sum > 0:
-                                parts = []
-                                if cumul_sum > 0: parts.append(f"누계 {cumul_sum:,.0f}")
-                                if bridge_sum > 0: parts.append(f"브릿지 {bridge_sum:,.0f}")
-                                st.caption(f"({' + '.join(parts)})")
-                            
-                            if gugan_res:
-                                st.markdown("**📌 시책 진행 (누계 포함)**")
-                                for r in gugan_res:
-                                    st.markdown(f"- {r['name']}: **{r['prize']:,.0f}원**")
-                                    for d in r.get('prize_details', []):
-                                        st.markdown(f"  - {d['label']}: {d['amount']:,.0f}원")
-                            
-                            if bridge_res:
-                                st.markdown("**🌉 브릿지 시상**")
-                                for r in bridge_res:
-                                    if r['type'] == '브릿지2':
-                                        st.markdown(f"- {r['name']}: **{r['prize']:,.0f}원** (당월 {int(r.get('curr_req',100000)//10000)}만 가동 시)")
-                                        if r.get('shortfall', 0) > 0:
-                                            st.markdown(f"  - 🚀 다음 구간까지 {r['shortfall']:,.0f}원")
-                                    else:
-                                        st.markdown(f"- {r['name']}: **{r['prize']:,.0f}원**")
-                                        for d in r.get('prize_details', []):
-                                            st.markdown(f"  - {d['label']}: {d['amount']:,.0f}원")
-                            
-                            if cumul_res:
-                                st.markdown("**📈 누계 시상**")
-                                for r in cumul_res:
-                                    st.markdown(f"- {r['name']}: **{r['prize']:,.0f}원**")
-                                    for d in r.get('prize_details', []):
-                                        st.markdown(f"  - {d['label']}: {d['amount']:,.0f}원")
-                        else:
-                            st.info("이 설계사의 시상금 데이터가 없습니다.")
+
           except Exception as e:
             st.error(f"데이터 처리 중 오류가 발생했습니다: {e}")
             st.info("관리자 화면에서 설정을 확인해주세요.")
