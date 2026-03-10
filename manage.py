@@ -2039,35 +2039,90 @@ if menu == "관리자 화면 (설정)":
                 if not isinstance(imported, list):
                     st.error("올바른 config.json 형식이 아닙니다.")
                 else:
-                    for c in imported:
-                        if 'category' not in c: c['category'] = 'weekly'
-                        c.pop('file', None)
-                        c.pop('col_name', None)
-                        c.pop('col_branch', None)
-                        c.pop('col_agency', None)
-                        c.pop('col_manager_code', None)
-                        c.pop('col_manager', None)
-                    
-                    weekly_cnt = sum(1 for c in imported if c.get('category', 'weekly') == 'weekly')
-                    cumul_cnt = sum(1 for c in imported if c.get('category') == 'cumulative')
-                    st.success(f"✅ {len(imported)}개 시책 감지됨 (주차/브릿지 {weekly_cnt}개 + 누계 {cumul_cnt}개)")
+                    # ★ 두 번째 앱 → 첫 번째 앱 형식으로 변환
+                    converted = []
+                    merged_cols = set(available_columns) if has_data() else set()
                     
                     for c in imported:
-                        st.markdown(f"- {'📌' if c.get('category')=='weekly' else '📈'} **{c.get('name', '?')}** ({c.get('type', '?')})")
+                        item = {}
+                        item['name'] = c.get('name', '')
+                        item['category'] = c.get('category', 'weekly')
+                        item['type'] = c.get('type', '구간 시책')
+                        item['col_code'] = c.get('col_code', '')
+                        item['col_val'] = c.get('col_val', '')
+                        item['col_val_prev'] = c.get('col_val_prev', '')
+                        item['col_val_curr'] = c.get('col_val_curr', '')
+                        item['curr_req'] = float(c.get('curr_req', 100000.0))
+                        
+                        # tiers: list of lists → list of tuples (정렬 유지)
+                        raw_tiers = c.get('tiers', [])
+                        if raw_tiers:
+                            item['tiers'] = sorted(
+                                [(float(t[0]), float(t[1])) for t in raw_tiers],
+                                key=lambda x: x[0], reverse=True
+                            )
+                        else:
+                            item['tiers'] = []
+                        
+                        # prize_items: file/col_code_ext 제거, 핵심 필드만 유지
+                        raw_items = c.get('prize_items', [])
+                        clean_items = []
+                        for pi in raw_items:
+                            clean_items.append({
+                                'label': pi.get('label', ''),
+                                'col_eligible': pi.get('col_eligible', ''),
+                                'col_prize': pi.get('col_prize', '') or pi.get('col', ''),
+                            })
+                        item['prize_items'] = clean_items
+                        
+                        converted.append(item)
+                    
+                    # ★ 검증 결과 표시
+                    weekly_cnt = sum(1 for c in converted if c.get('category') == 'weekly')
+                    cumul_cnt = sum(1 for c in converted if c.get('category') == 'cumulative')
+                    st.success(f"✅ {len(converted)}개 시책 감지됨 (주차/브릿지 {weekly_cnt}개 + 누계 {cumul_cnt}개)")
+                    
+                    for c in converted:
+                        icon = '📌' if c.get('category')=='weekly' else '📈'
+                        st.markdown(f"- {icon} **{c['name']}** ({c['type']})")
+                        
+                        # 컬럼 존재 검증
+                        if merged_cols:
+                            missing = []
+                            if c['col_code'] and c['col_code'] not in merged_cols:
+                                missing.append(f"col_code: `{c['col_code']}`")
+                            if c['col_val'] and c['col_val'] not in merged_cols:
+                                missing.append(f"col_val: `{c['col_val']}`")
+                            if c['col_val_prev'] and c['col_val_prev'] not in merged_cols:
+                                missing.append(f"col_val_prev: `{c['col_val_prev']}`")
+                            if c['col_val_curr'] and c['col_val_curr'] not in merged_cols:
+                                missing.append(f"col_val_curr: `{c['col_val_curr']}`")
+                            for pi in c.get('prize_items', []):
+                                if pi['col_prize'] and pi['col_prize'] not in merged_cols:
+                                    missing.append(f"col_prize: `{pi['col_prize']}`")
+                                if pi['col_eligible'] and pi['col_eligible'] not in merged_cols:
+                                    missing.append(f"col_eligible: `{pi['col_eligible']}`")
+                            if missing:
+                                st.warning(f"  ⚠️ df_merged에 없는 컬럼: {', '.join(missing)}")
+                    
+                    # ★ 기존 설정 현황 표시
+                    existing_cnt = len(prize_cfgs)
+                    if existing_cnt > 0:
+                        st.info(f"📋 현재 기존 시책이 {existing_cnt}개 있습니다. '교체'를 선택하면 모두 삭제 후 교체됩니다.")
                     
                     col_a, col_b = st.columns(2)
                     with col_a:
                         if st.button("✅ 기존 설정에 추가 (병합)", key="merge_json"):
-                            prize_cfgs.extend(imported)
+                            prize_cfgs.extend(converted)
                             st.session_state['prize_config'] = prize_cfgs
                             save_data_and_config()
                             st.success("기존 설정에 추가 완료!")
                             st.rerun()
                     with col_b:
-                        if st.button("🔄 기존 설정 대체 (교체)", key="replace_json"):
-                            st.session_state['prize_config'] = imported
+                        if st.button("🔄 기존 설정 대체 (교체) ← 권장", key="replace_json"):
+                            st.session_state['prize_config'] = converted
                             save_data_and_config()
-                            st.success("설정 교체 완료!")
+                            st.success(f"✅ 설정 교체 완료! ({len(converted)}개 시책)")
                             st.rerun()
             except json.JSONDecodeError:
                 st.error("JSON 파일 형식이 올바르지 않습니다.")
