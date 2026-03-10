@@ -2030,102 +2030,150 @@ if menu == "관리자 화면 (설정)":
             st.info("시상금 시책이 없습니다. 위 버튼으로 추가하거나, 아래에서 기존 앱의 설정을 가져오세요.")
         
         st.markdown("---")
-        st.markdown("**📥 기존 시상금 앱에서 설정 가져오기**")
-        st.caption("기존 시상금 계산 앱의 config.json 파일을 업로드하면 시책 설정이 자동으로 변환됩니다.")
-        json_file = st.file_uploader("config.json 파일 업로드", type=['json'], key="import_prize_json")
-        if json_file is not None:
+        st.markdown("### 📥 시상금 설정 가져오기 (config.json)")
+        st.caption("1단계: 파일 업로드 → 2단계: 미리보기 확인 → 3단계: [적용] 버튼 클릭")
+        
+        # ── 적용 완료 배너 ──
+        if st.session_state.get('_prize_applied'):
+            applied_info = st.session_state.get('_prize_applied_info', '')
+            st.markdown(
+                f'<div style="background:#22C55E;color:#fff;padding:16px 20px;border-radius:12px;'
+                f'font-size:18px;font-weight:800;text-align:center;margin-bottom:16px;">'
+                f'✅ 적용 완료! {applied_info}</div>',
+                unsafe_allow_html=True
+            )
+            if st.button("확인 (이 메시지 닫기)", key="close_applied_banner"):
+                del st.session_state['_prize_applied']
+                st.rerun()
+        
+        # ── 1단계: 파일 업로드 ──
+        json_file = st.file_uploader("config.json 파일 선택", type=['json'], key="import_prize_json")
+        
+        if json_file is None:
+            st.info("👆 config.json 파일을 업로드하면 미리보기가 표시됩니다.")
+        else:
             try:
-                imported = json.load(json_file)
-                if not isinstance(imported, list):
-                    st.error("올바른 config.json 형식이 아닙니다.")
+                raw_data = json.load(json_file)
+                if not isinstance(raw_data, list):
+                    st.error("올바른 config.json 형식이 아닙니다. (배열이어야 합니다)")
                 else:
-                    # ★ 두 번째 앱 → 첫 번째 앱 형식으로 변환
+                    # ── 변환 ──
                     converted = []
                     merged_cols = set(available_columns) if has_data() else set()
                     
-                    for c in imported:
-                        item = {}
-                        item['name'] = c.get('name', '')
-                        item['category'] = c.get('category', 'weekly')
-                        item['type'] = c.get('type', '구간 시책')
-                        item['col_code'] = c.get('col_code', '')
-                        item['col_val'] = c.get('col_val', '')
-                        item['col_val_prev'] = c.get('col_val_prev', '')
-                        item['col_val_curr'] = c.get('col_val_curr', '')
-                        item['curr_req'] = float(c.get('curr_req', 100000.0))
-                        
-                        # tiers: list of lists → list of tuples (정렬 유지)
+                    for c in raw_data:
+                        item = {
+                            'name': c.get('name', ''),
+                            'category': c.get('category', 'weekly'),
+                            'type': c.get('type', '구간 시책'),
+                            'col_code': c.get('col_code', ''),
+                            'col_val': c.get('col_val', ''),
+                            'col_val_prev': c.get('col_val_prev', ''),
+                            'col_val_curr': c.get('col_val_curr', ''),
+                            'curr_req': float(c.get('curr_req', 100000.0)),
+                        }
                         raw_tiers = c.get('tiers', [])
-                        if raw_tiers:
-                            item['tiers'] = sorted(
-                                [(float(t[0]), float(t[1])) for t in raw_tiers],
-                                key=lambda x: x[0], reverse=True
-                            )
-                        else:
-                            item['tiers'] = []
-                        
-                        # prize_items: file/col_code_ext 제거, 핵심 필드만 유지
-                        raw_items = c.get('prize_items', [])
-                        clean_items = []
-                        for pi in raw_items:
-                            clean_items.append({
-                                'label': pi.get('label', ''),
-                                'col_eligible': pi.get('col_eligible', ''),
-                                'col_prize': pi.get('col_prize', '') or pi.get('col', ''),
-                            })
-                        item['prize_items'] = clean_items
-                        
+                        item['tiers'] = sorted(
+                            [(float(t[0]), float(t[1])) for t in raw_tiers],
+                            key=lambda x: x[0], reverse=True
+                        ) if raw_tiers else []
+                        item['prize_items'] = [{
+                            'label': pi.get('label', ''),
+                            'col_eligible': pi.get('col_eligible', ''),
+                            'col_prize': pi.get('col_prize', '') or pi.get('col', ''),
+                        } for pi in c.get('prize_items', [])]
                         converted.append(item)
                     
-                    # ★ 검증 결과 표시
+                    # ── 2단계: 미리보기 ──
                     weekly_cnt = sum(1 for c in converted if c.get('category') == 'weekly')
                     cumul_cnt = sum(1 for c in converted if c.get('category') == 'cumulative')
-                    st.success(f"✅ {len(converted)}개 시책 감지됨 (주차/브릿지 {weekly_cnt}개 + 누계 {cumul_cnt}개)")
                     
-                    for c in converted:
-                        icon = '📌' if c.get('category')=='weekly' else '📈'
-                        st.markdown(f"- {icon} **{c['name']}** ({c['type']})")
+                    st.markdown("---")
+                    st.markdown(f"#### 📋 미리보기 — 총 {len(converted)}개 시책")
+                    st.markdown(f"주차/브릿지 **{weekly_cnt}**개 · 누계 **{cumul_cnt}**개")
+                    
+                    has_issue = False
+                    for idx, c in enumerate(converted):
+                        icon = '📌' if c['category'] == 'weekly' else '📈'
                         
-                        # 컬럼 존재 검증
-                        if merged_cols:
-                            missing = []
-                            if c['col_code'] and c['col_code'] not in merged_cols:
-                                missing.append(f"col_code: `{c['col_code']}`")
-                            if c['col_val'] and c['col_val'] not in merged_cols:
-                                missing.append(f"col_val: `{c['col_val']}`")
-                            if c['col_val_prev'] and c['col_val_prev'] not in merged_cols:
-                                missing.append(f"col_val_prev: `{c['col_val_prev']}`")
-                            if c['col_val_curr'] and c['col_val_curr'] not in merged_cols:
-                                missing.append(f"col_val_curr: `{c['col_val_curr']}`")
-                            for pi in c.get('prize_items', []):
-                                if pi['col_prize'] and pi['col_prize'] not in merged_cols:
-                                    missing.append(f"col_prize: `{pi['col_prize']}`")
-                                if pi['col_eligible'] and pi['col_eligible'] not in merged_cols:
-                                    missing.append(f"col_eligible: `{pi['col_eligible']}`")
-                            if missing:
-                                st.warning(f"  ⚠️ df_merged에 없는 컬럼: {', '.join(missing)}")
+                        with st.expander(f"{icon} [{idx+1}] {c['name']} — {c['type']}", expanded=False):
+                            st.markdown(f"**사번 열:** `{c['col_code']}`")
+                            
+                            if '2기간' in c['type']:
+                                st.markdown(f"**전월 실적 (구간 매칭):** `{c['col_val_prev']}`")
+                                st.markdown(f"**당월 실적 (가동 확인):** `{c['col_val_curr']}`")
+                                st.markdown(f"**가동 금액:** {c['curr_req']:,.0f}원")
+                                if c['tiers']:
+                                    st.markdown("**구간:** " + " / ".join(
+                                        f"{int(t[0]):,}원→{int(t[1])}%" for t in c['tiers']
+                                    ))
+                            elif '1기간' in c['type']:
+                                st.markdown(f"**전월:** `{c['col_val_prev']}` / **당월:** `{c['col_val_curr']}`")
+                            elif c['category'] == 'cumulative':
+                                st.markdown(f"**누계 실적:** `{c['col_val']}`")
+                            else:
+                                st.markdown(f"**실적:** `{c['col_val']}`")
+                            
+                            for pi in c['prize_items']:
+                                lbl = pi['label'] or '(이름없음)'
+                                prz = pi['col_prize'] or '(tiers 자동계산)'
+                                st.markdown(f"💰 `{lbl}` → `{prz}`")
+                            
+                            if merged_cols:
+                                missing = []
+                                for key in ['col_code', 'col_val', 'col_val_prev', 'col_val_curr']:
+                                    v = c.get(key, '')
+                                    if v and v not in merged_cols:
+                                        missing.append(f"`{v}`")
+                                for pi in c['prize_items']:
+                                    for v in [pi.get('col_prize',''), pi.get('col_eligible','')]:
+                                        if v and v not in merged_cols:
+                                            missing.append(f"`{v}`")
+                                if missing:
+                                    st.error(f"❌ 데이터에 없는 컬럼: {', '.join(missing)}")
+                                    has_issue = True
+                                else:
+                                    st.success("✅ 컬럼 검증 통과")
                     
-                    # ★ 기존 설정 현황 표시
+                    if has_issue:
+                        st.warning("⚠️ 일부 컬럼이 없습니다. 데이터 파일을 먼저 병합한 후 적용하세요.")
+                    
                     existing_cnt = len(prize_cfgs)
                     if existing_cnt > 0:
-                        st.info(f"📋 현재 기존 시책이 {existing_cnt}개 있습니다. '교체'를 선택하면 모두 삭제 후 교체됩니다.")
+                        st.info(f"현재 기존 시책 **{existing_cnt}개**가 설정되어 있습니다.")
+                    
+                    # ── 3단계: 적용 버튼 ──
+                    st.markdown("---")
+                    st.markdown("#### 🚀 적용")
                     
                     col_a, col_b = st.columns(2)
                     with col_a:
-                        if st.button("✅ 기존 설정에 추가 (병합)", key="merge_json"):
+                        st.caption("기존 설정 삭제 → 새 설정으로 교체")
+                        if st.button(
+                            f"🔄 교체 적용 ({len(converted)}개)",
+                            key="replace_json", type="primary", use_container_width=True
+                        ):
+                            st.session_state['prize_config'] = converted
+                            save_data_and_config()
+                            st.session_state['_prize_applied'] = True
+                            st.session_state['_prize_applied_info'] = f"{len(converted)}개 시책으로 교체 완료"
+                            st.rerun()
+                    
+                    with col_b:
+                        st.caption("기존 설정 유지 + 새 설정 추가 (중복 주의!)")
+                        if st.button(
+                            f"➕ 추가 ({existing_cnt} + {len(converted)}개)",
+                            key="merge_json", use_container_width=True
+                        ):
                             prize_cfgs.extend(converted)
                             st.session_state['prize_config'] = prize_cfgs
                             save_data_and_config()
-                            st.success("기존 설정에 추가 완료!")
+                            st.session_state['_prize_applied'] = True
+                            st.session_state['_prize_applied_info'] = f"기존 {existing_cnt}개 + 신규 {len(converted)}개 = 총 {len(prize_cfgs)}개"
                             st.rerun()
-                    with col_b:
-                        if st.button("🔄 기존 설정 대체 (교체) ← 권장", key="replace_json"):
-                            st.session_state['prize_config'] = converted
-                            save_data_and_config()
-                            st.success(f"✅ 설정 교체 완료! ({len(converted)}개 시책)")
-                            st.rerun()
+                    
             except json.JSONDecodeError:
-                st.error("JSON 파일 형식이 올바르지 않습니다.")
+                st.error("❌ JSON 파일 형식이 올바르지 않습니다.")
             
     else:
         st.info("👆 먼저 위에서 두 파일을 업로드하고 [데이터 병합 및 교체]를 눌러주세요.")
