@@ -979,8 +979,8 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
         
         clip_texts.append('\n'.join(lines))
     
-    # ★ base64 대신 <script type="application/json"> 태그로 안전하게 전달
-    clip_json_str = json.dumps(clip_texts, ensure_ascii=False).replace('</','<\\/')
+    # ★ ensure_ascii=True로 ASCII-only JSON 생성 (JS 변수 직접 대입용)
+    clip_json_safe = json.dumps(clip_texts, ensure_ascii=True).replace('</','<\\/')
     
     # 💰 시상금 HTML 데이터 (행별)
     prize_htmls = []
@@ -1034,7 +1034,7 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
         else:
             prize_htmls.append('')
     
-    prize_json_str = json.dumps(prize_htmls, ensure_ascii=False).replace('</','<\\/')
+    prize_json_safe = json.dumps(prize_htmls, ensure_ascii=True).replace('</','<\\/')
     
     # ══════════════════════════════════════════
     # 📱 모바일 카드 뷰 생성
@@ -1153,67 +1153,54 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
     """
     
     # ══════════════════════════════════════════════════════════
-    # ★★★ JSON 데이터를 script 태그로 안전하게 삽입 ★★★
+    # ★★★ JS 데이터: f-string 아닌 문자열 연결로 안전하게 삽입 ★★★
     # ══════════════════════════════════════════════════════════
-    html += f'<script type="application/json" id="__clip_data">{clip_json_str}</script>'
-    html += f'<script type="application/json" id="__prize_data">{prize_json_str}</script>'
+    html += '<script>\n'
+    html += 'var clipData = ' + clip_json_safe + ';\n'
+    html += 'var prizeHtml = ' + prize_json_safe + ';\n'
+    html += 'var FC_DESKTOP = ' + str(freeze_count) + ';\n'
+    html += 'var FC = FC_DESKTOP;\n'
     
-    # ══════════════════════════════════════════════════════════
-    # ★★★ 수정된 JavaScript — iframe 환경 안전 버전 ★★★
-    # ══════════════════════════════════════════════════════════
-    html += f"""
-    <script>
-    var FC_DESKTOP = {freeze_count};
-    var FC = FC_DESKTOP;
-    
-    /* ★ FIX: JSON script 태그에서 데이터 읽기 (base64 디코딩 제거) */
-    var clipData = [];
-    var prizeHtml = [];
-    try {{ clipData = JSON.parse(document.getElementById('__clip_data').textContent); }} catch(e) {{ console.error('clipData parse error:', e); }}
-    try {{ prizeHtml = JSON.parse(document.getElementById('__prize_data').textContent); }} catch(e) {{ console.error('prizeHtml parse error:', e); }}
-    
-    /* 디버그: JS 정상 로드 확인 (2초 후 자동 삭제) */
-    (function() {{
+    # ★ 나머지 함수는 table_id만 필요하므로 .replace()로 삽입
+    js_functions = r"""
+    /* 디버그: 3초 후 자동 삭제 */
+    (function() {
         var d = document.createElement('div');
-        d.id = '__js_debug';
         d.style.cssText = 'position:fixed;top:4px;right:4px;z-index:999999;padding:4px 10px;border-radius:6px;font-size:11px;font-weight:700;';
         d.style.background = (clipData.length > 0) ? '#22C55E' : '#f59e0b';
         d.style.color = '#fff';
         d.textContent = 'JS OK | clip=' + clipData.length + ' prize=' + prizeHtml.length;
         document.body.appendChild(d);
-        setTimeout(function() {{ if(d.parentNode) d.parentNode.removeChild(d); }}, 3000);
-    }})();
+        setTimeout(function() { if(d.parentNode) d.parentNode.removeChild(d); }, 3000);
+    })();
     
-    function isMobile() {{ return window.innerWidth <= 768; }}
+    function isMobile() { return window.innerWidth <= 768; }
     
-    /* ★ FIX 2: copyClip — 모바일은 share→overlay, 데스크톱은 fallback→overlay */
-    function copyClip(idx, btn, evt) {{
+    function copyClip(idx, btn, evt) {
         if (evt) evt.stopPropagation();
-        var text = '';
-        try {{ text = clipData[idx] || ''; }} catch(e) {{ console.error('copyClip data error:', e); }}
-        if (!text) return;
+        var text = clipData[idx] || '';
+        if (!text) { alert('복사할 데이터가 없습니다 (idx=' + idx + ')'); return; }
         
-        if (isMobile()) {{
-            if (navigator.share) {{
-                try {{
-                    navigator.share({{ text: text }}).then(function() {{
+        if (isMobile()) {
+            if (navigator.share) {
+                try {
+                    navigator.share({ text: text }).then(function() {
                         showCopied(btn);
-                    }}).catch(function() {{
+                    }).catch(function() {
                         showOverlay(text);
-                    }});
+                    });
                     return;
-                }} catch(e) {{ /* share 동기 에러 — overlay로 */ }}
-            }}
+                } catch(e) {}
+            }
             showOverlay(text);
             return;
-        }}
+        }
         fallbackCopy(text, btn);
-    }}
+    }
     
-    /* ★ FIX 3: fallbackCopy — 모든 단계에 try-catch, 최종 overlay 보장 */
-    function fallbackCopy(text, btn) {{
+    function fallbackCopy(text, btn) {
         var ok = false;
-        try {{
+        try {
             var ta = document.createElement('textarea');
             ta.value = text;
             ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
@@ -1221,176 +1208,170 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
             ta.focus();
             ta.select();
             ta.setSelectionRange(0, 999999);
-            try {{ ok = document.execCommand('copy'); }} catch(e) {{}}
+            try { ok = document.execCommand('copy'); } catch(e) {}
             document.body.removeChild(ta);
-        }} catch(e) {{ console.error('execCommand copy error:', e); }}
-        if (ok) {{
+        } catch(e) {}
+        if (ok) {
             showCopied(btn);
             return;
-        }}
-        try {{
-            if (navigator.clipboard && navigator.clipboard.writeText) {{
-                navigator.clipboard.writeText(text).then(function() {{
+        }
+        try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(function() {
                     showCopied(btn);
-                }}).catch(function() {{
+                }).catch(function() {
                     showOverlay(text);
-                }});
+                });
                 return;
-            }}
-        }} catch(e) {{ console.error('clipboard API error:', e); }}
+            }
+        } catch(e) {}
         showOverlay(text);
-    }}
+    }
     
-    /* ★ FIX 4: showOverlay — readOnly 해제 + null 체크 */
-    function showOverlay(text) {{
-        try {{
-            var ov = document.getElementById('clip-overlay');
-            var ta = document.getElementById('clip-ta');
-            if (!ov || !ta) {{ console.error('showOverlay: DOM not found'); return; }}
-            ta.readOnly = false;
-            ta.value = text;
-            ov.style.display = 'flex';
-            setTimeout(function() {{
-                ta.focus(); ta.select();
-                try {{ ta.setSelectionRange(0, 999999); }} catch(e) {{}}
-            }}, 150);
-        }} catch(e) {{ console.error('showOverlay error:', e); }}
-    }}
+    function showOverlay(text) {
+        var ov = document.getElementById('clip-overlay');
+        var ta = document.getElementById('clip-ta');
+        if (!ov || !ta) return;
+        ta.readOnly = false;
+        ta.value = text;
+        ov.style.display = 'flex';
+        setTimeout(function() {
+            ta.focus(); ta.select();
+            try { ta.setSelectionRange(0, 999999); } catch(e) {}
+        }, 150);
+    }
     
-    /* ★ FIX 5: doCopyOverlay — clipboard API 우선 + execCommand 후순위 */
-    function doCopyOverlay() {{
+    function doCopyOverlay() {
         var ta = document.getElementById('clip-ta');
         var btn = document.getElementById('clip-copy-btn');
         if (!ta || !btn) return;
         var text = ta.value;
-        
-        try {{
-            if (navigator.clipboard && navigator.clipboard.writeText) {{
-                navigator.clipboard.writeText(text).then(function() {{
-                    btn.textContent = '✅ 복사 완료!';
+        try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(function() {
+                    btn.textContent = '\u2705 복사 완료!';
                     btn.style.background = '#22C55E'; btn.style.color = '#fff';
-                    setTimeout(function() {{
+                    setTimeout(function() {
                         document.getElementById('clip-overlay').style.display = 'none';
-                        btn.textContent = '📋 복사하기';
+                        btn.textContent = '\uD83D\uDCCB 복사하기';
                         btn.style.background = '#FEE500'; btn.style.color = '#3C1E1E';
-                    }}, 1200);
-                }}).catch(function() {{
+                    }, 1200);
+                }).catch(function() {
                     tryExecCopy(ta, btn);
-                }});
+                });
                 return;
-            }}
-        }} catch(e) {{}}
+            }
+        } catch(e) {}
         tryExecCopy(ta, btn);
-    }}
-    function tryExecCopy(ta, btn) {{
+    }
+    function tryExecCopy(ta, btn) {
         var ok = false;
-        try {{
+        try {
             ta.readOnly = false;
             ta.focus(); ta.select();
             ta.setSelectionRange(0, 999999);
-            try {{ ok = document.execCommand('copy'); }} catch(e) {{}}
-        }} catch(e) {{}}
-        if (ok) {{
-            btn.textContent = '✅ 복사 완료!';
+            try { ok = document.execCommand('copy'); } catch(e) {}
+        } catch(e) {}
+        if (ok) {
+            btn.textContent = '\u2705 복사 완료!';
             btn.style.background = '#22C55E'; btn.style.color = '#fff';
-            setTimeout(function() {{
+            setTimeout(function() {
                 document.getElementById('clip-overlay').style.display = 'none';
-                btn.textContent = '📋 복사하기';
+                btn.textContent = '\uD83D\uDCCB 복사하기';
                 btn.style.background = '#FEE500'; btn.style.color = '#3C1E1E';
-            }}, 1200);
-        }} else {{
-            btn.textContent = '⚠️ 텍스트를 길게 눌러 복사하세요';
+            }, 1200);
+        } else {
+            btn.textContent = '\u26A0\uFE0F Ctrl+C로 복사하세요';
             btn.style.background = '#f59e0b'; btn.style.color = '#fff';
             ta.readOnly = false;
             ta.focus(); ta.select();
-            try {{ ta.setSelectionRange(0, 999999); }} catch(e) {{}}
-        }}
-    }}
+            try { ta.setSelectionRange(0, 999999); } catch(e) {}
+        }
+    }
     
-    function showCopied(btn) {{
+    function showCopied(btn) {
         if (!btn) return;
         var orig = btn.innerHTML;
         btn.classList.add('copied');
-        btn.innerHTML = '✅ 복사 완료!';
-        setTimeout(function() {{ btn.classList.remove('copied'); btn.innerHTML = orig; }}, 1500);
-    }}
+        btn.innerHTML = '\u2705 복사 완료!';
+        setTimeout(function() { btn.classList.remove('copied'); btn.innerHTML = orig; }, 1500);
+    }
     
-    /* ★ FIX 6: showPrize — alert 제거, null 체크, try-catch */
-    function showPrize(idx, evt) {{
+    function showPrize(idx, evt) {
         if (evt) evt.stopPropagation();
-        try {{
-            var h = (prizeHtml && prizeHtml[idx]) || '';
-            var el = document.getElementById('prize-content');
-            var ov = document.getElementById('prize-overlay');
-            if (!el || !ov) {{ console.error('showPrize: DOM not found'); return; }}
-            if (!h) {{ el.innerHTML = '<p style="color:#888;text-align:center;padding:20px;">시상금 데이터가 없습니다.</p>'; }}
-            else {{ el.innerHTML = h; }}
-            ov.style.display = 'flex';
-        }} catch(e) {{ console.error('showPrize error:', e); }}
-    }}
+        var h = (prizeHtml && prizeHtml[idx]) || '';
+        var el = document.getElementById('prize-content');
+        var ov = document.getElementById('prize-overlay');
+        if (!el || !ov) return;
+        if (!h) { el.innerHTML = '<p style="color:#888;text-align:center;padding:20px;">시상금 데이터가 없습니다.</p>'; }
+        else { el.innerHTML = h; }
+        ov.style.display = 'flex';
+    }
     
-    function applyFreeze() {{
-        var t = document.getElementById("{table_id}");
+    function applyFreeze() {
+        var t = document.getElementById("__TABLE_ID__");
         FC = isMobile() ? Math.min(FC_DESKTOP, 2) : FC_DESKTOP;
         if (!t || FC === 0) return;
         var fr = t.querySelector("tbody tr");
         if (!fr) return;
         var lp = [], cl = 0;
-        for (var i = 0; i < FC; i++) {{ lp.push(cl); if (fr.cells[i]) cl += fr.cells[i].offsetWidth; }}
-        t.querySelectorAll(".col-freeze").forEach(function(c) {{
+        for (var i = 0; i < FC; i++) { lp.push(cl); if (fr.cells[i]) cl += fr.cells[i].offsetWidth; }
+        t.querySelectorAll(".col-freeze").forEach(function(c) {
             var idx = parseInt(c.getAttribute("data-col"));
-            if (!isNaN(idx) && idx < FC) {{
+            if (!isNaN(idx) && idx < FC) {
                 c.style.left = lp[idx] + "px";
                 c.style.position = "sticky";
                 c.style.zIndex = c.tagName === "TH" ? "3" : "1";
-            }} else if (!isNaN(idx) && idx >= FC) {{
+            } else if (!isNaN(idx) && idx >= FC) {
                 c.style.position = "static";
                 c.style.boxShadow = "none";
-            }}
-        }});
-    }}
-    function autoResize() {{
+            }
+        });
+    }
+    function autoResize() {
         if (!window.frameElement) return;
         var vh = window.parent.innerHeight || 900;
-        if (isMobile()) {{
+        if (isMobile()) {
             var mv = document.querySelector('.mobile-view');
             if (mv) window.frameElement.style.height = Math.min(mv.scrollHeight + 20, Math.round(vh * 0.80)) + "px";
-        }} else {{
-            var w = document.getElementById("wrap_{table_id}");
+        } else {
+            var w = document.getElementById("wrap___TABLE_ID__");
             if (w) window.frameElement.style.height = Math.min(w.scrollHeight + 4, Math.round(vh * 0.85)) + "px";
-        }}
-    }}
-    window.addEventListener('load', function() {{ applyFreeze(); autoResize(); }});
-    window.addEventListener('resize', function() {{ applyFreeze(); autoResize(); }});
-    var ss = {{}};
-    function sortTable(th) {{
-        var t = document.getElementById("{table_id}");
+        }
+    }
+    window.addEventListener('load', function() { applyFreeze(); autoResize(); });
+    window.addEventListener('resize', function() { applyFreeze(); autoResize(); });
+    var ss = {};
+    function sortTable(th) {
+        var t = document.getElementById("__TABLE_ID__");
         var tb = t.querySelector("tbody");
         var rows = Array.from(tb.querySelectorAll("tr"));
         var ci = parseInt(th.getAttribute("data-col"));
         if (isNaN(ci)) return;
-        var asc = ss[ci] !== true; ss = {{}}; ss[ci] = asc;
-        rows.sort(function(a, b) {{
+        var asc = ss[ci] !== true; ss = {}; ss[ci] = asc;
+        rows.sort(function(a, b) {
             var aT = a.cells[ci].textContent.trim(), bT = b.cells[ci].textContent.trim();
             var aN = parseFloat(aT.replace(/,/g,"")), bN = parseFloat(bT.replace(/,/g,""));
             if (aT === "" && bT === "") return 0;
             if (aT === "") return 1; if (bT === "") return -1;
             if (!isNaN(aN) && !isNaN(bN)) return asc ? aN - bN : bN - aN;
             return asc ? aT.localeCompare(bT,'ko') : bT.localeCompare(aT,'ko');
-        }});
-        rows.forEach(function(r) {{ tb.appendChild(r); }});
+        });
+        rows.forEach(function(r) { tb.appendChild(r); });
         var allRows = tb.querySelectorAll("tr");
-        allRows.forEach(function(r, idx) {{ if (r.cells[0]) r.cells[0].textContent = idx + 1; }});
-        t.querySelectorAll("thead th").forEach(function(h) {{
+        allRows.forEach(function(r, idx) { if (r.cells[0]) r.cells[0].textContent = idx + 1; });
+        t.querySelectorAll("thead th").forEach(function(h) {
             var ar = h.querySelector(".sa"); if (!ar) return;
             var hi = parseInt(h.getAttribute("data-col"));
-            if (hi === ci) {{ ar.textContent = asc ? "▲" : "▼"; ar.className = "sa active"; }}
-            else {{ ar.textContent = "▲▼"; ar.className = "sa"; }}
-        }});
+            if (hi === ci) { ar.textContent = asc ? "\u25B2" : "\u25BC"; ar.className = "sa active"; }
+            else { ar.textContent = "\u25B2\u25BC"; ar.className = "sa"; }
+        });
         setTimeout(autoResize, 50);
-    }}
-    </script>
-    """
+    }
+    """.replace('__TABLE_ID__', table_id)
+    
+    html += js_functions
+    html += '\n</script>\n'
     return html
 
 # ==========================================
