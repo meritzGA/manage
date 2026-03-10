@@ -1881,7 +1881,9 @@ if menu == "관리자 화면 (설정)":
                     with c1: cfg['col_val_prev'] = st.selectbox("전월 실적 열", cols, index=_gi(cfg.get('col_val_prev',''), cols), key=f"pprev_{idx}")
                     with c2: cfg['col_val_curr'] = st.selectbox("당월 실적 열", cols, index=_gi(cfg.get('col_val_curr',''), cols), key=f"pcurr_{idx}")
                 elif "2기간" in cfg['type']:
-                    cfg['col_val_curr'] = st.selectbox("당월 실적 열", cols, index=_gi(cfg.get('col_val_curr',''), cols), key=f"pcurr2_{idx}")
+                    c1, c2 = st.columns(2)
+                    with c1: cfg['col_val_prev'] = st.selectbox("전월 브릿지 실적 열 (구간 매칭용)", cols, index=_gi(cfg.get('col_val_prev',''), cols), key=f"pprev2_{idx}")
+                    with c2: cfg['col_val_curr'] = st.selectbox("당월 실적 열 (가동 확인용)", cols, index=_gi(cfg.get('col_val_curr',''), cols), key=f"pcurr2_{idx}")
                 else:
                     cfg['col_val'] = st.selectbox("실적 수치 열", cols, index=_gi(cfg.get('col_val',''), cols), key=f"pval_{idx}")
                 
@@ -2253,6 +2255,17 @@ elif menu == "매니저 화면 (로그인)":
                         final_df[c] = final_df[c].apply(format_with_comma_and_hide_zero)
                 
                 col_groups = st.session_state.get('col_groups', [])
+                
+                # ★ 중복 시책 감지
+                prize_config_raw = st.session_state.get('prize_config', [])
+                seen_names = {}
+                for pc in prize_config_raw:
+                    n = pc.get('name', '')
+                    seen_names[n] = seen_names.get(n, 0) + 1
+                dupes = {n: cnt for n, cnt in seen_names.items() if cnt > 1}
+                if dupes:
+                    dupe_msg = ", ".join([f"'{n}' ({cnt}개)" for n, cnt in dupes.items()])
+                    st.error(f"⚠️ 시상금 설정에 중복 시책이 있습니다: {dupe_msg}\n관리자 화면 9번에서 중복 항목을 삭제해주세요. (시상금이 배로 계산됩니다)")
                 
                 prize_data_map = {}
                 try:
