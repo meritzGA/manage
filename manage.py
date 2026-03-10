@@ -2459,159 +2459,157 @@ elif menu == "매니저 화면 (로그인)":
                 except Exception as prize_err:
                     st.warning(f"⚠️ 시상금 계산 중 오류: {prize_err}")
                 
-                table_html = render_html_table(final_df, col_groups=col_groups, prize_data_map=prize_data_map)
-                
-                components.html(table_html, height=800, scrolling=False)
-                
                 # ══════════════════════════════════════════════════════
-                # ★ Streamlit 네이티브 복사/시상금 UI (JS 불필요)
+                # ★★★ Streamlit 네이티브 UI (JS 완전 제거) ★★★
                 # ══════════════════════════════════════════════════════
-                st.divider()
                 
-                # 설계사 목록 생성
-                name_col_for_select = None
-                for c in final_df.columns:
-                    if any(kw in c for kw in ['설계사명', '성명', '이름', '팀장명']):
-                        name_col_for_select = c
-                        break
-                
-                agent_options = []
-                for row_idx, (_, row) in enumerate(final_df.iterrows()):
-                    num = row.get('순번', row_idx + 1)
-                    name_val = str(row.get(name_col_for_select, '')) if name_col_for_select else f"설계사{row_idx+1}"
-                    if pd.isna(name_val) or not name_val.strip(): name_val = f"설계사{row_idx+1}"
-                    # 시상금 정보 추가
-                    prize_tag = ""
-                    if prize_data_map and row_idx in prize_data_map:
-                        _, pt = prize_data_map[row_idx]
-                        if pt > 0:
-                            prize_tag = f" 💰{pt:,.0f}원"
-                    agent_options.append(f"{num}. {name_val}{prize_tag}")
-                
-                sel_idx = st.selectbox(
-                    "📋 카톡 복사 / 💰 시상금 조회할 설계사 선택",
-                    range(len(agent_options)),
-                    format_func=lambda i: agent_options[i],
-                    key="native_agent_select"
+                # ── 1. 정렬 가능한 테이블 (st.dataframe 내장 정렬) ──
+                st.dataframe(
+                    final_df,
+                    use_container_width=True,
+                    height=min(800, 60 + len(final_df) * 35),
+                    hide_index=True,
                 )
                 
-                if sel_idx is not None:
-                    # 클립보드 텍스트 생성 (render_html_table 내부와 동일한 로직)
-                    columns_list = list(final_df.columns)
-                    clip_name_keywords_n = ['지사', '설계사명', '성명', '이름', '팀장명']
-                    goal_keywords_n = ['다음목표', '부족금액']
-                    clip_name_cols_n = []
-                    data_cols_n = []
-                    for c in columns_list:
+                # ── 2. 설계사 선택 드롭다운 ──
+                st.divider()
+                
+                name_col_n = None
+                for c in final_df.columns:
+                    if any(kw in c for kw in ['설계사명', '성명', '이름', '팀장명']):
+                        name_col_n = c
+                        break
+                
+                agent_labels = []
+                for ri, (_, rw) in enumerate(final_df.iterrows()):
+                    num = rw.get('순번', ri + 1)
+                    nm = str(rw.get(name_col_n, '')) if name_col_n else f"설계사{ri+1}"
+                    if pd.isna(nm) or not str(nm).strip(): nm = f"설계사{ri+1}"
+                    ptag = ""
+                    if prize_data_map and ri in prize_data_map:
+                        _, pt = prize_data_map[ri]
+                        if pt > 0: ptag = f" 💰{pt:,.0f}원"
+                    agent_labels.append(f"{num}. {nm}{ptag}")
+                
+                sel_i = st.selectbox(
+                    "📋 카톡 문구 복사 / 💰 시상금 조회",
+                    range(len(agent_labels)),
+                    format_func=lambda i: agent_labels[i],
+                    key="native_sel"
+                )
+                
+                # ── 3. 선택된 설계사 카톡 문구 + 시상금 표시 ──
+                if sel_i is not None:
+                    cols_list = list(final_df.columns)
+                    cn_kw = ['지사', '설계사명', '성명', '이름', '팀장명']
+                    gl_kw = ['다음목표', '부족금액']
+                    cn_cols, dt_cols = [], []
+                    for c in cols_list:
                         if c == '순번' or c == '맞춤분류': continue
-                        if any(kw in c for kw in goal_keywords_n): data_cols_n.append(c)
-                        elif any(kw in c for kw in clip_name_keywords_n) and '코드' not in c and '번호' not in c: clip_name_cols_n.append(c)
-                        else: data_cols_n.append(c)
+                        if any(kw in c for kw in gl_kw): dt_cols.append(c)
+                        elif any(kw in c for kw in cn_kw) and '코드' not in c and '번호' not in c: cn_cols.append(c)
+                        else: dt_cols.append(c)
                     
-                    col_to_grp_n = {}
+                    cg_map = {}
                     for grp in col_groups:
-                        for c in grp['cols']:
-                            col_to_grp_n[c] = grp['name']
+                        for c in grp['cols']: cg_map[c] = grp['name']
                     
-                    sel_row = final_df.iloc[sel_idx]
+                    sr = final_df.iloc[sel_i]
+                    nparts = []
+                    for c in cn_cols:
+                        v = str(sr[c]) if not pd.isna(sr[c]) else ''
+                        if v.strip() and v != '0': nparts.append(v.strip())
+                    pline = ' '.join(nparts)
+                    if pline and not pline.endswith('님'): pline += ' 팀장님'
                     
-                    name_parts = []
-                    for c in clip_name_cols_n:
-                        v = str(sel_row[c]) if not pd.isna(sel_row[c]) else ''
-                        if v.strip() and v != '0': name_parts.append(v.strip())
-                    person_line = ' '.join(name_parts)
-                    if person_line and not person_line.endswith('님'): person_line += ' 팀장님'
+                    dd = st.session_state.get('data_date', '')
+                    cf = st.session_state.get('clip_footer', '')
+                    if not cf.strip(): cf = "팀장님! 시상 부족금액 안내드려요!\n부족한 거 챙겨서 꼭 시상 많이 받아 가셨으면 좋겠습니다!\n좋은 하루 되세요!"
                     
-                    data_date_n = st.session_state.get('data_date', '')
-                    clip_footer_n = st.session_state.get('clip_footer', '')
-                    if not clip_footer_n.strip():
-                        clip_footer_n = "팀장님! 시상 부족금액 안내드려요!\n부족한 거 챙겨서 꼭 시상 많이 받아 가셨으면 좋겠습니다!\n좋은 하루 되세요!"
+                    ls = ["📋 메리츠 시상 현황 안내"]
+                    if dd: ls.append(f"📅 기준일: {dd}")
+                    ls.append(""); ls.append(f"👤 {pline}"); ls.append("")
                     
-                    lines = ["📋 메리츠 시상 현황 안내"]
-                    if data_date_n: lines.append(f"📅 기준일: {data_date_n}")
-                    lines.append(""); lines.append(f"👤 {person_line}"); lines.append("")
-                    
-                    current_group = None
-                    for c in data_cols_n:
+                    cur_grp = None
+                    for c in dt_cols:
                         if '코드' in c or '번호' in c: continue
-                        val = str(sel_row[c]) if not pd.isna(sel_row[c]) else ''
+                        val = str(sr[c]) if not pd.isna(sr[c]) else ''
                         if not val.strip() or val == '0': continue
-                        grp = col_to_grp_n.get(c)
-                        is_goal = any(kw in c for kw in goal_keywords_n)
-                        if grp and grp != current_group:
-                            if current_group is not None: lines.append("")
-                            lines.append(f"━━ {grp} ━━"); current_group = grp
-                        elif grp is None and not is_goal and current_group is not None:
-                            lines.append(""); current_group = None
-                        if '부족금액' in c: lines.append(f"🔴 {c}: {val}")
-                        elif '다음목표' in c: lines.append(f"🎯 {c}: {val}")
-                        else: lines.append(f"  {c}: {val}")
+                        g = cg_map.get(c)
+                        ig = any(kw in c for kw in gl_kw)
+                        if g and g != cur_grp:
+                            if cur_grp is not None: ls.append("")
+                            ls.append(f"━━ {g} ━━"); cur_grp = g
+                        elif g is None and not ig and cur_grp is not None:
+                            ls.append(""); cur_grp = None
+                        if '부족금액' in c: ls.append(f"🔴 {c}: {val}")
+                        elif '다음목표' in c: ls.append(f"🎯 {c}: {val}")
+                        else: ls.append(f"  {c}: {val}")
                     
-                    if prize_data_map and sel_idx in prize_data_map:
-                        p_results, p_total = prize_data_map[sel_idx]
-                        prize_text = format_prize_clip_text(p_results, p_total)
-                        if prize_text: lines.append(prize_text)
+                    if prize_data_map and sel_i in prize_data_map:
+                        pr, pt = prize_data_map[sel_i]
+                        ptext = format_prize_clip_text(pr, pt)
+                        if ptext: ls.append(ptext)
                     
-                    if clip_footer_n: lines.append(""); lines.append(clip_footer_n)
+                    if cf: ls.append(""); ls.append(cf)
+                    clip_text = '\n'.join(ls)
                     
-                    clip_text = '\n'.join(lines)
+                    c_left, c_right = st.columns(2)
                     
-                    col_copy, col_prize = st.columns(2)
-                    
-                    with col_copy:
+                    with c_left:
                         st.markdown("#### 📋 카톡 복사 문구")
+                        st.caption("텍스트 영역 클릭 → Ctrl+A → Ctrl+C")
                         st.text_area(
-                            "아래 텍스트를 전체 선택(Ctrl+A) 후 복사(Ctrl+C)하세요",
+                            "copy_area",
                             value=clip_text,
-                            height=300,
-                            key=f"native_clip_{sel_idx}"
+                            height=350,
+                            key=f"ntv_clip_{sel_i}",
+                            label_visibility="collapsed"
                         )
                     
-                    with col_prize:
+                    with c_right:
                         st.markdown("#### 💰 시상금 상세")
-                        if prize_data_map and sel_idx in prize_data_map:
-                            p_results, p_total = prize_data_map[sel_idx]
+                        if prize_data_map and sel_i in prize_data_map:
+                            pr, pt = prize_data_map[sel_i]
+                            gg = [r for r in pr if r['category'] == 'weekly' and r['type'] == '구간']
+                            br = [r for r in pr if r['category'] == 'weekly' and '브릿지' in r['type']]
+                            cu = [r for r in pr if r['category'] == 'cumulative']
+                            cs = sum(r['prize'] for r in cu)
+                            bs = sum(r['prize'] for r in br)
                             
-                            gugan_res = [r for r in p_results if r['category'] == 'weekly' and r['type'] == '구간']
-                            bridge_res = [r for r in p_results if r['category'] == 'weekly' and '브릿지' in r['type']]
-                            cumul_res = [r for r in p_results if r['category'] == 'cumulative']
-                            cumul_sum = sum(r['prize'] for r in cumul_res)
-                            bridge_sum = sum(r['prize'] for r in bridge_res)
+                            st.markdown(f"### 💰 총 시상금: **{pt:,.0f}원**")
+                            if cs > 0 or bs > 0:
+                                pp = []
+                                if cs > 0: pp.append(f"누계 {cs:,.0f}")
+                                if bs > 0: pp.append(f"브릿지 {bs:,.0f}")
+                                st.caption(f"({' + '.join(pp)})")
                             
-                            st.markdown(f"### 💰 총 시상금: **{p_total:,.0f}원**")
-                            if cumul_sum > 0 or bridge_sum > 0:
-                                parts = []
-                                if cumul_sum > 0: parts.append(f"누계 {cumul_sum:,.0f}")
-                                if bridge_sum > 0: parts.append(f"브릿지 {bridge_sum:,.0f}")
-                                st.caption(f"({' + '.join(parts)})")
-                            
-                            if gugan_res:
+                            if gg:
                                 st.markdown("**📌 시책 진행 (누계 포함)**")
-                                for r in gugan_res:
+                                for r in gg:
                                     st.markdown(f"- {r['name']}: **{r['prize']:,.0f}원**")
                                     for d in r.get('prize_details', []):
-                                        st.markdown(f"  - {d['label']}: {d['amount']:,.0f}원")
-                            
-                            if bridge_res:
+                                        st.caption(f"　　· {d['label']}: {d['amount']:,.0f}원")
+                            if br:
                                 st.markdown("**🌉 브릿지 시상**")
-                                for r in bridge_res:
+                                for r in br:
                                     if r['type'] == '브릿지2':
                                         st.markdown(f"- {r['name']}: **{r['prize']:,.0f}원** (당월 {int(r.get('curr_req',100000)//10000)}만 가동 시)")
                                         if r.get('shortfall', 0) > 0:
-                                            st.markdown(f"  - 🚀 다음 구간까지 {r['shortfall']:,.0f}원")
+                                            st.caption(f"　　🚀 다음 구간까지 {r['shortfall']:,.0f}원")
                                     else:
                                         st.markdown(f"- {r['name']}: **{r['prize']:,.0f}원**")
                                         for d in r.get('prize_details', []):
-                                            st.markdown(f"  - {d['label']}: {d['amount']:,.0f}원")
-                            
-                            if cumul_res:
+                                            st.caption(f"　　· {d['label']}: {d['amount']:,.0f}원")
+                            if cu:
                                 st.markdown("**📈 누계 시상**")
-                                for r in cumul_res:
+                                for r in cu:
                                     st.markdown(f"- {r['name']}: **{r['prize']:,.0f}원**")
                                     for d in r.get('prize_details', []):
-                                        st.markdown(f"  - {d['label']}: {d['amount']:,.0f}원")
+                                        st.caption(f"　　· {d['label']}: {d['amount']:,.0f}원")
                         else:
-                            st.info("이 설계사의 시상금 데이터가 없습니다.")
+                            st.info("시상금 데이터가 없습니다.")
+
           except Exception as e:
             st.error(f"데이터 처리 중 오류가 발생했습니다: {e}")
             st.info("관리자 화면에서 설정을 확인해주세요.")
