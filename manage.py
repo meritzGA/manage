@@ -859,7 +859,7 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
             bar = f'<div class="grp-bar" style="background:{gc};"></div>'
         else:
             bar = ''
-        html += f'<th class="{f_cls}" data-col="{i}" onclick="sortTable(this)">{bar}{col} <span class="sa">▲▼</span></th>'
+        html += f'<th class="{f_cls}" data-col="{i}" data-action="sort">{bar}{col} <span class="sa">▲▼</span></th>'
     html += '<th data-col="-1" style="min-width:50px; cursor:default;">복사</th>'
     html += '</tr></thead><tbody>'
 
@@ -871,9 +871,9 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
             f_cls = fc(i)
             extra = " sc" if (col in shortfall_cols and cell_val != "") else ""
             html += f'<td class="{f_cls}{extra}" data-col="{i}">{cell_val}</td>'
-        html += f'<td data-col="-1"><button class="d-copy-btn" onclick="copyClip({row_idx}, this, event)">📋</button>'
+        html += f'<td data-col="-1"><button class="d-copy-btn" data-action="copy" data-idx="{row_idx}">📋</button>'
         if prize_data_map and row_idx in prize_data_map:
-            html += f'<button class="d-copy-btn" onclick="showPrize({row_idx}, event)" style="margin-left:2px;">💰</button>'
+            html += f'<button class="d-copy-btn" data-action="prize" data-idx="{row_idx}" style="margin-left:2px;">💰</button>'
         html += '</td>'
         html += '</tr>'
     html += '</tbody></table></div>'
@@ -1073,7 +1073,7 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
                 summary_items.append(f'<span style="background:#fff3e0;color:#d9232e;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700;">💰{p_display}</span>')
                 summary = ' '.join(summary_items)
         
-        html += f'<div class="m-card-head" onclick="this.parentElement.classList.toggle(\'open\')">'
+        html += f'<div class="m-card-head" data-action="toggle">'
         html += f'<span class="m-num">{num_val}</span><span class="m-name">{name_val}</span>'
         if summary:
             html += f'<span class="m-summary">{summary}</span>'
@@ -1081,9 +1081,9 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
         
         html += '<div class="m-card-body">'
         
-        html += f'<div class="m-copy-wrap"><button class="m-copy-btn" onclick="copyClip({row_idx}, this, event)">📋 카톡 보내기</button>'
+        html += f'<div class="m-copy-wrap"><button class="m-copy-btn" data-action="copy" data-idx="{row_idx}">📋 카톡 보내기</button>'
         if prize_data_map and row_idx in prize_data_map:
-            html += f'<button class="m-copy-btn" onclick="showPrize({row_idx}, event)" style="background:#fff3e0;color:#d9232e;border:1px solid #ffd4a8;margin-top:4px;">💰 시상금 상세 조회</button>'
+            html += f'<button class="m-copy-btn" data-action="prize" data-idx="{row_idx}" style="background:#fff3e0;color:#d9232e;border:1px solid #ffd4a8;margin-top:4px;">💰 시상금 상세 조회</button>'
         html += '</div>'
         
         for c in clip_name_cols:
@@ -1122,30 +1122,28 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
     
     # ── 복사 팝업 오버레이 ──
     html += """
-    <div id="clip-overlay" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0;
-        background:rgba(0,0,0,0.5); z-index:99999; justify-content:center; align-items:center; padding:20px;"
-        onclick="if(event.target===this){this.style.display='none';}">
+    <div id="clip-overlay" data-action="overlay-bg" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0;
+        background:rgba(0,0,0,0.5); z-index:99999; justify-content:center; align-items:center; padding:20px;">
         <div style="background:#fff; border-radius:16px; padding:20px; width:100%;
             max-width:500px; max-height:70vh; box-shadow:0 10px 40px rgba(0,0,0,0.3);">
             <h3 style="margin:0 0 10px; font-size:16px;">📋 아래 텍스트를 복사하세요</h3>
             <textarea id="clip-ta" style="width:100%; height:200px; border:1px solid #ddd; border-radius:8px;
                 padding:10px; font-size:14px; resize:none; font-family:inherit; box-sizing:border-box;"></textarea>
-            <button id="clip-copy-btn" onclick="doCopyOverlay()" style="margin-top:10px; width:100%; padding:12px;
+            <button id="clip-copy-btn" data-action="overlay-copy" style="margin-top:10px; width:100%; padding:12px;
                 border:none; border-radius:10px; font-size:15px; font-weight:700; cursor:pointer;
                 background:#FEE500; color:#3C1E1E;">📋 복사하기</button>
-            <button onclick="document.getElementById('clip-overlay').style.display='none'" style="margin-top:6px;
+            <button data-action="close-clip" style="margin-top:6px;
                 width:100%; padding:12px; border:none; border-radius:10px; font-size:15px; font-weight:700;
                 cursor:pointer; background:#f2f4f6; color:#333;">닫기</button>
         </div>
     </div>
-    <div id="prize-overlay" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0;
-        background:rgba(0,0,0,0.5); z-index:99999; justify-content:center; align-items:center; padding:20px;"
-        onclick="if(event.target===this){this.style.display='none';}">
+    <div id="prize-overlay" data-action="overlay-bg" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0;
+        background:rgba(0,0,0,0.5); z-index:99999; justify-content:center; align-items:center; padding:20px;">
         <div style="background:#fff; border-radius:16px; padding:24px; width:100%;
             max-width:450px; max-height:70vh; overflow-y:auto; box-shadow:0 10px 40px rgba(0,0,0,0.3);">
             <h3 style="margin:0 0 12px; font-size:17px;">💰 시상금 상세 조회</h3>
             <div id="prize-content"></div>
-            <button onclick="document.getElementById('prize-overlay').style.display='none'" style="margin-top:12px;
+            <button data-action="close-prize" style="margin-top:12px;
                 width:100%; padding:12px; border:none; border-radius:10px; font-size:15px; font-weight:700;
                 cursor:pointer; background:#f2f4f6; color:#333;">닫기</button>
         </div>
@@ -1163,65 +1161,102 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
     
     # ★ 나머지 함수는 table_id만 필요하므로 .replace()로 삽입
     js_functions = r"""
-    /* 디버그: 3초 후 자동 삭제 */
+    /* ★ 에러 가시화: 모든 JS 에러를 화면에 표시 */
+    window.onerror = function(msg, url, line) {
+        var d = document.createElement('div');
+        d.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:999999;padding:8px;background:#dc2626;color:#fff;font-size:12px;';
+        d.textContent = 'JS ERROR: ' + msg + ' (line ' + line + ')';
+        document.body.appendChild(d);
+    };
+    
+    /* 디버그 배지: 5초 후 삭제 */
     (function() {
         var d = document.createElement('div');
-        d.style.cssText = 'position:fixed;top:4px;right:4px;z-index:999999;padding:4px 10px;border-radius:6px;font-size:11px;font-weight:700;';
+        d.style.cssText = 'position:fixed;top:4px;right:4px;z-index:999999;padding:6px 12px;border-radius:6px;font-size:12px;font-weight:700;';
         d.style.background = (clipData.length > 0) ? '#22C55E' : '#f59e0b';
         d.style.color = '#fff';
-        d.textContent = 'JS OK | clip=' + clipData.length + ' prize=' + prizeHtml.length;
+        d.textContent = 'JS OK | clip=' + clipData.length + ' prize=' + prizeHtml.filter(function(x){return x!=='';}).length;
         document.body.appendChild(d);
-        setTimeout(function() { if(d.parentNode) d.parentNode.removeChild(d); }, 3000);
+        setTimeout(function() { if(d.parentNode) d.parentNode.removeChild(d); }, 5000);
     })();
     
     function isMobile() { return window.innerWidth <= 768; }
+
+    /* ═══════════════════════════════════════════
+       ★ 이벤트 위임: 모든 클릭을 document에서 처리
+       ═══════════════════════════════════════════ */
+    document.addEventListener('click', function(e) {
+        var target = e.target;
+        var actionEl = target.closest('[data-action]');
+        if (!actionEl) return;
+        
+        var action = actionEl.getAttribute('data-action');
+        var idx = parseInt(actionEl.getAttribute('data-idx'));
+        
+        switch(action) {
+            case 'copy':
+                e.stopPropagation();
+                doCopy(idx, actionEl);
+                break;
+            case 'prize':
+                e.stopPropagation();
+                doShowPrize(idx);
+                break;
+            case 'sort':
+                doSort(actionEl);
+                break;
+            case 'toggle':
+                actionEl.parentElement.classList.toggle('open');
+                break;
+            case 'overlay-bg':
+                if (e.target === actionEl) actionEl.style.display = 'none';
+                break;
+            case 'overlay-copy':
+                doOverlayCopy();
+                break;
+            case 'close-clip':
+                document.getElementById('clip-overlay').style.display = 'none';
+                break;
+            case 'close-prize':
+                document.getElementById('prize-overlay').style.display = 'none';
+                break;
+        }
+    });
     
-    function copyClip(idx, btn, evt) {
-        if (evt) evt.stopPropagation();
+    function doCopy(idx, btn) {
         var text = clipData[idx] || '';
-        if (!text) { alert('복사할 데이터가 없습니다 (idx=' + idx + ')'); return; }
+        if (!text) return;
         
         if (isMobile()) {
             if (navigator.share) {
                 try {
                     navigator.share({ text: text }).then(function() {
                         showCopied(btn);
-                    }).catch(function() {
-                        showOverlay(text);
-                    });
+                    }).catch(function() { showOverlay(text); });
                     return;
                 } catch(e) {}
             }
             showOverlay(text);
             return;
         }
-        fallbackCopy(text, btn);
-    }
-    
-    function fallbackCopy(text, btn) {
+        
         var ok = false;
         try {
             var ta = document.createElement('textarea');
             ta.value = text;
             ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
             document.body.appendChild(ta);
-            ta.focus();
-            ta.select();
-            ta.setSelectionRange(0, 999999);
+            ta.focus(); ta.select(); ta.setSelectionRange(0, 999999);
             try { ok = document.execCommand('copy'); } catch(e) {}
             document.body.removeChild(ta);
         } catch(e) {}
-        if (ok) {
-            showCopied(btn);
-            return;
-        }
+        if (ok) { showCopied(btn); return; }
+        
         try {
             if (navigator.clipboard && navigator.clipboard.writeText) {
                 navigator.clipboard.writeText(text).then(function() {
                     showCopied(btn);
-                }).catch(function() {
-                    showOverlay(text);
-                });
+                }).catch(function() { showOverlay(text); });
                 return;
             }
         } catch(e) {}
@@ -1232,117 +1267,54 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
         var ov = document.getElementById('clip-overlay');
         var ta = document.getElementById('clip-ta');
         if (!ov || !ta) return;
-        ta.readOnly = false;
-        ta.value = text;
-        ov.style.display = 'flex';
-        setTimeout(function() {
-            ta.focus(); ta.select();
-            try { ta.setSelectionRange(0, 999999); } catch(e) {}
-        }, 150);
+        ta.readOnly = false; ta.value = text; ov.style.display = 'flex';
+        setTimeout(function() { ta.focus(); ta.select(); try { ta.setSelectionRange(0, 999999); } catch(e) {} }, 150);
     }
     
-    function doCopyOverlay() {
+    function doOverlayCopy() {
         var ta = document.getElementById('clip-ta');
         var btn = document.getElementById('clip-copy-btn');
         if (!ta || !btn) return;
-        var text = ta.value;
         try {
             if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(text).then(function() {
-                    btn.textContent = '\u2705 복사 완료!';
-                    btn.style.background = '#22C55E'; btn.style.color = '#fff';
-                    setTimeout(function() {
-                        document.getElementById('clip-overlay').style.display = 'none';
-                        btn.textContent = '\uD83D\uDCCB 복사하기';
-                        btn.style.background = '#FEE500'; btn.style.color = '#3C1E1E';
-                    }, 1200);
-                }).catch(function() {
-                    tryExecCopy(ta, btn);
-                });
+                navigator.clipboard.writeText(ta.value).then(function() { copyDone(btn,true); }).catch(function() { execFallback(ta,btn); });
                 return;
             }
         } catch(e) {}
-        tryExecCopy(ta, btn);
+        execFallback(ta, btn);
     }
-    function tryExecCopy(ta, btn) {
+    function execFallback(ta, btn) {
         var ok = false;
-        try {
-            ta.readOnly = false;
-            ta.focus(); ta.select();
-            ta.setSelectionRange(0, 999999);
-            try { ok = document.execCommand('copy'); } catch(e) {}
-        } catch(e) {}
+        try { ta.readOnly=false; ta.focus(); ta.select(); ta.setSelectionRange(0,999999); try{ok=document.execCommand('copy');}catch(e){} } catch(e) {}
+        copyDone(btn, ok);
+    }
+    function copyDone(btn, ok) {
         if (ok) {
-            btn.textContent = '\u2705 복사 완료!';
+            btn.textContent = '\u2705 \ubcf5\uc0ac \uc644\ub8cc!';
             btn.style.background = '#22C55E'; btn.style.color = '#fff';
-            setTimeout(function() {
-                document.getElementById('clip-overlay').style.display = 'none';
-                btn.textContent = '\uD83D\uDCCB 복사하기';
-                btn.style.background = '#FEE500'; btn.style.color = '#3C1E1E';
-            }, 1200);
+            setTimeout(function() { document.getElementById('clip-overlay').style.display='none'; btn.textContent='\uD83D\uDCCB \ubcf5\uc0ac\ud558\uae30'; btn.style.background='#FEE500'; btn.style.color='#3C1E1E'; }, 1200);
         } else {
-            btn.textContent = '\u26A0\uFE0F Ctrl+C로 복사하세요';
-            btn.style.background = '#f59e0b'; btn.style.color = '#fff';
-            ta.readOnly = false;
-            ta.focus(); ta.select();
-            try { ta.setSelectionRange(0, 999999); } catch(e) {}
+            btn.textContent = '\u26A0 Ctrl+C'; btn.style.background = '#f59e0b'; btn.style.color = '#fff';
+            ta.readOnly = false; ta.focus(); ta.select();
         }
     }
-    
     function showCopied(btn) {
         if (!btn) return;
-        var orig = btn.innerHTML;
-        btn.classList.add('copied');
-        btn.innerHTML = '\u2705 복사 완료!';
+        var orig = btn.innerHTML; btn.classList.add('copied'); btn.innerHTML = '\u2705';
         setTimeout(function() { btn.classList.remove('copied'); btn.innerHTML = orig; }, 1500);
     }
     
-    function showPrize(idx, evt) {
-        if (evt) evt.stopPropagation();
+    function doShowPrize(idx) {
         var h = (prizeHtml && prizeHtml[idx]) || '';
         var el = document.getElementById('prize-content');
         var ov = document.getElementById('prize-overlay');
         if (!el || !ov) return;
-        if (!h) { el.innerHTML = '<p style="color:#888;text-align:center;padding:20px;">시상금 데이터가 없습니다.</p>'; }
-        else { el.innerHTML = h; }
+        el.innerHTML = h || '<p style="color:#888;text-align:center;padding:20px;">\uc2dc\uc0c1\uae08 \ub370\uc774\ud130 \uc5c6\uc74c</p>';
         ov.style.display = 'flex';
     }
-    
-    function applyFreeze() {
-        var t = document.getElementById("__TABLE_ID__");
-        FC = isMobile() ? Math.min(FC_DESKTOP, 2) : FC_DESKTOP;
-        if (!t || FC === 0) return;
-        var fr = t.querySelector("tbody tr");
-        if (!fr) return;
-        var lp = [], cl = 0;
-        for (var i = 0; i < FC; i++) { lp.push(cl); if (fr.cells[i]) cl += fr.cells[i].offsetWidth; }
-        t.querySelectorAll(".col-freeze").forEach(function(c) {
-            var idx = parseInt(c.getAttribute("data-col"));
-            if (!isNaN(idx) && idx < FC) {
-                c.style.left = lp[idx] + "px";
-                c.style.position = "sticky";
-                c.style.zIndex = c.tagName === "TH" ? "3" : "1";
-            } else if (!isNaN(idx) && idx >= FC) {
-                c.style.position = "static";
-                c.style.boxShadow = "none";
-            }
-        });
-    }
-    function autoResize() {
-        if (!window.frameElement) return;
-        var vh = window.parent.innerHeight || 900;
-        if (isMobile()) {
-            var mv = document.querySelector('.mobile-view');
-            if (mv) window.frameElement.style.height = Math.min(mv.scrollHeight + 20, Math.round(vh * 0.80)) + "px";
-        } else {
-            var w = document.getElementById("wrap___TABLE_ID__");
-            if (w) window.frameElement.style.height = Math.min(w.scrollHeight + 4, Math.round(vh * 0.85)) + "px";
-        }
-    }
-    window.addEventListener('load', function() { applyFreeze(); autoResize(); });
-    window.addEventListener('resize', function() { applyFreeze(); autoResize(); });
+
     var ss = {};
-    function sortTable(th) {
+    function doSort(th) {
         var t = document.getElementById("__TABLE_ID__");
         var tb = t.querySelector("tbody");
         var rows = Array.from(tb.querySelectorAll("tr"));
@@ -1358,8 +1330,7 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
             return asc ? aT.localeCompare(bT,'ko') : bT.localeCompare(aT,'ko');
         });
         rows.forEach(function(r) { tb.appendChild(r); });
-        var allRows = tb.querySelectorAll("tr");
-        allRows.forEach(function(r, idx) { if (r.cells[0]) r.cells[0].textContent = idx + 1; });
+        tb.querySelectorAll("tr").forEach(function(r, idx) { if (r.cells[0]) r.cells[0].textContent = idx + 1; });
         t.querySelectorAll("thead th").forEach(function(h) {
             var ar = h.querySelector(".sa"); if (!ar) return;
             var hi = parseInt(h.getAttribute("data-col"));
@@ -1368,11 +1339,40 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
         });
         setTimeout(autoResize, 50);
     }
+    
+    function applyFreeze() {
+        var t = document.getElementById("__TABLE_ID__");
+        FC = isMobile() ? Math.min(FC_DESKTOP, 2) : FC_DESKTOP;
+        if (!t || FC === 0) return;
+        var fr = t.querySelector("tbody tr");
+        if (!fr) return;
+        var lp = [], cl = 0;
+        for (var i = 0; i < FC; i++) { lp.push(cl); if (fr.cells[i]) cl += fr.cells[i].offsetWidth; }
+        t.querySelectorAll(".col-freeze").forEach(function(c) {
+            var idx = parseInt(c.getAttribute("data-col"));
+            if (!isNaN(idx) && idx < FC) { c.style.left = lp[idx]+"px"; c.style.position = "sticky"; c.style.zIndex = c.tagName==="TH"?"3":"1"; }
+            else if (!isNaN(idx) && idx >= FC) { c.style.position = "static"; c.style.boxShadow = "none"; }
+        });
+    }
+    function autoResize() {
+        if (!window.frameElement) return;
+        var vh = window.parent.innerHeight || 900;
+        if (isMobile()) {
+            var mv = document.querySelector('.mobile-view');
+            if (mv) window.frameElement.style.height = Math.min(mv.scrollHeight+20, Math.round(vh*0.80))+"px";
+        } else {
+            var w = document.getElementById("wrap___TABLE_ID__");
+            if (w) window.frameElement.style.height = Math.min(w.scrollHeight+4, Math.round(vh*0.85))+"px";
+        }
+    }
+    window.addEventListener('load', function() { applyFreeze(); autoResize(); });
+    window.addEventListener('resize', function() { applyFreeze(); autoResize(); });
     """.replace('__TABLE_ID__', table_id)
     
     html += js_functions
     html += '\n</script>\n'
     return html
+
 
 # ==========================================
 # 3. 사이드바 (메뉴 선택)
@@ -2278,6 +2278,10 @@ elif menu == "매니저 화면 (로그인)":
                     st.warning(f"⚠️ 시상금 계산 중 오류: {prize_err}")
                 
                 table_html = render_html_table(final_df, col_groups=col_groups, prize_data_map=prize_data_map)
+                
+                # ★ 디버그: 생성된 HTML 다운로드 버튼
+                st.download_button("🔍 디버그: HTML 다운로드", table_html.encode('utf-8'), 
+                                   file_name="debug_table.html", mime="text/html", key="debug_html_dl")
                 
                 components.html(table_html, height=800, scrolling=False)
           except Exception as e:
