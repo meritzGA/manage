@@ -2146,6 +2146,20 @@ if menu == "관리자 화면 (설정)":
                     st.markdown("---")
                     st.markdown("#### 🚀 적용")
                     
+                    def _clear_prize_widget_keys():
+                        """시상금 설정 위젯의 캐시된 session_state 키를 모두 삭제.
+                        이래야 rerun 후 새 config 값이 위젯에 반영됨."""
+                        prefixes = (
+                            'pname_', 'ptype_', 'pccode_', 'pprev_', 'pprev2_',
+                            'pcurr_', 'pcurr2_', 'pval_', 'psave_', 'tier_',
+                            'creq2_', 'del_prize_',
+                            'wpilbl_', 'wpidel_', 'wpielig_', 'wpiprz_', 'wpiadd_',
+                            'cpilbl_', 'cpidel_', 'cpielig_', 'cpiprz_', 'cpiadd_',
+                        )
+                        keys_to_del = [k for k in st.session_state.keys() if any(k.startswith(p) for p in prefixes)]
+                        for k in keys_to_del:
+                            del st.session_state[k]
+                    
                     col_a, col_b = st.columns(2)
                     with col_a:
                         st.caption("기존 설정 삭제 → 새 설정으로 교체")
@@ -2155,6 +2169,7 @@ if menu == "관리자 화면 (설정)":
                         ):
                             st.session_state['prize_config'] = converted
                             save_data_and_config()
+                            _clear_prize_widget_keys()
                             st.session_state['_prize_applied'] = True
                             st.session_state['_prize_applied_info'] = f"{len(converted)}개 시책으로 교체 완료"
                             st.rerun()
@@ -2168,6 +2183,7 @@ if menu == "관리자 화면 (설정)":
                             prize_cfgs.extend(converted)
                             st.session_state['prize_config'] = prize_cfgs
                             save_data_and_config()
+                            _clear_prize_widget_keys()
                             st.session_state['_prize_applied'] = True
                             st.session_state['_prize_applied_info'] = f"기존 {existing_cnt}개 + 신규 {len(converted)}개 = 총 {len(prize_cfgs)}개"
                             st.rerun()
