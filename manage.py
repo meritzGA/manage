@@ -348,19 +348,16 @@ def _first_valid(df, col):
     return s.values[0] if not s.empty else 0
 
 def _read_prize_items_app(cfg, match_df):
-    """설정에서 시상금 항목들을 읽어 [{label, amount}] 리스트 반환.
-    지급률(col_eligible)=0이면 미대상으로 제외, 그 외 값이면 대상으로 포함. 공란이면 무조건 포함.
-    ★ 수정: outer merge로 NaN 행이 섞일 수 있으므로 dropna()로 유효 값 우선 사용."""
+    """설정에서 시상금 항목들을 읽어 [{label, amount}] 리스트 반환."""
     prize_details = []
     items = cfg.get('prize_items', [])
     if items:
         for item in items:
-            col_prize = item.get('col_prize', '') or item.get('col', '')  # 구형 호환
+            col_prize = item.get('col_prize', '') or item.get('col', '')
             label = item.get('label', '')
             if not col_prize or col_prize not in match_df.columns:
                 continue
             
-            # 대상 여부 확인 — ★ dropna() 적용
             col_elig = item.get('col_eligible', '')
             if col_elig and col_elig in match_df.columns:
                 elig_series = match_df[col_elig].dropna()
@@ -368,7 +365,6 @@ def _read_prize_items_app(cfg, match_df):
                 if elig_val == 0:
                     continue
             
-            # 시상금 읽기 — ★ dropna() 적용
             prize_series = match_df[col_prize].dropna()
             raw = prize_series.values[0] if not prize_series.empty else 0
             amt = _safe_float_prize(raw)
@@ -384,8 +380,7 @@ def _read_prize_items_app(cfg, match_df):
     return prize_details
 
 def calculate_prize_for_code(target_code, prize_config, df_src):
-    """특정 사번의 시상금을 df_merged에서 직접 읽기
-    ★ 수정: 브릿지/구간 실적 값도 _first_valid()로 NaN 행 건너뜀"""
+    """특정 사번의 시상금을 df_merged에서 직접 읽기"""
     if not prize_config or df_src is None or df_src.empty:
         return [], 0
     results = []
@@ -406,21 +401,18 @@ def calculate_prize_for_code(target_code, prize_config, df_src):
         cat = cfg.get('category', 'weekly')
         p_type = cfg.get('type', '구간 시책')
         
-        # 시상금 여러 항목 읽기
         prize_details = _read_prize_items_app(cfg, match_df)
         prize = sum(d['amount'] for d in prize_details)
         
         if cat == 'weekly':
             if "1기간" in p_type:
-                if not prize_details: continue  # 미대상 → 항목 자체 미표시
-                # ★ 수정: _first_valid()로 NaN 행 건너뜀
+                if not prize_details: continue
                 val_prev = _safe_float_prize(_first_valid(match_df, cfg.get('col_val_prev', '')))
                 val_curr = _safe_float_prize(_first_valid(match_df, cfg.get('col_val_curr', '')))
                 results.append({"name": cfg['name'], "category": "weekly", "type": "브릿지1",
                     "val_prev": val_prev, "val_curr": val_curr, "prize": prize, "prize_details": prize_details})
 
             elif "2기간" in p_type:
-                # ★ 수정: _first_valid()로 NaN 행 건너뜀 (브릿지 버그 핵심 수정)
                 val_curr = _safe_float_prize(_first_valid(match_df, cfg.get('col_val_curr', '')))
                 
                 curr_req = float(cfg.get('curr_req', 100000.0))
@@ -446,20 +438,17 @@ def calculate_prize_for_code(target_code, prize_config, df_src):
                     "val": val_curr, "tier": tier_achieved, "rate": calc_rate, "prize": prize,
                     "curr_req": curr_req, "next_tier": next_tier, "shortfall": shortfall})
             else:
-                if not prize_details: continue  # 미대상 → 항목 자체 미표시
-                # ★ 수정: _first_valid()로 NaN 행 건너뜀
+                if not prize_details: continue
                 val = _safe_float_prize(_first_valid(match_df, cfg.get('col_val', '')))
                 results.append({"name": cfg['name'], "category": "weekly", "type": "구간",
                     "val": val, "prize": prize, "prize_details": prize_details})
 
         elif cat == 'cumulative':
-            if not prize_details: continue  # 미대상 → 항목 자체 미표시
-            # ★ 수정: _first_valid()로 NaN 행 건너뜀
+            if not prize_details: continue
             val = _safe_float_prize(_first_valid(match_df, cfg.get('col_val', '')))
             results.append({"name": cfg['name'], "category": "cumulative", "type": "누계",
                 "val": val, "prize": prize, "prize_details": prize_details})
     
-    # 총 시상 = 누계 + 브릿지만 (구간 시책은 누계에 이미 포함되므로 제외)
     cumul_sum = sum(r['prize'] for r in results if r['category'] == 'cumulative')
     bridge_sum = sum(r['prize'] for r in results if r['category'] == 'weekly' and '브릿지' in r['type'])
     total = cumul_sum + bridge_sum
@@ -574,10 +563,8 @@ def clean_key(val):
     if val_str.endswith('.0'): val_str = val_str[:-2]
     return val_str
 
-# 숫자/텍스트 혼동 및 콤마 완벽 해결 평가 함수
 def evaluate_condition(df, col, cond):
     cond_clean = re.sub(r'(?<=\d),(?=\d)', '', cond).strip()
-    # ✅ 단일 = 를 == 로 자동 변환 (>=, <=, !=, == 는 건드리지 않음)
     cond_clean = re.sub(r'(?<![><!= ])=(?!=)', '==', cond_clean)
     try:
         temp_s = df[col].astype(str).str.replace(',', '', regex=False)
@@ -1167,106 +1154,163 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
     </div>
     """
 
+    # ══════════════════════════════════════════════════════════
+    # ★★★ 수정된 JavaScript — iframe 환경 안전 버전 ★★★
+    # ══════════════════════════════════════════════════════════
     html += f"""
     <script>
     var FC_DESKTOP = {freeze_count};
     var FC = FC_DESKTOP;
-    var clipData = JSON.parse(decodeURIComponent(escape(atob("{clip_b64}"))));
-    var prizeHtml = JSON.parse(decodeURIComponent(escape(atob("{prize_b64}"))));
+    
+    /* ★ FIX 1: try-catch로 초기화 — 하나 실패해도 나머지 함수 정상 작동 */
+    var clipData = [];
+    var prizeHtml = [];
+    try {{ clipData = JSON.parse(decodeURIComponent(escape(atob("{clip_b64}")))); }} catch(e) {{ console.error('clipData init error:', e); }}
+    try {{ prizeHtml = JSON.parse(decodeURIComponent(escape(atob("{prize_b64}")))); }} catch(e) {{ console.error('prizeHtml init error:', e); }}
     
     function isMobile() {{ return window.innerWidth <= 768; }}
     
+    /* ★ FIX 2: copyClip — 모바일은 share→overlay, 데스크톱은 fallback→overlay */
     function copyClip(idx, btn, evt) {{
-        evt.stopPropagation();
-        var text = clipData[idx];
+        if (evt) evt.stopPropagation();
+        var text = '';
+        try {{ text = clipData[idx] || ''; }} catch(e) {{ console.error('copyClip data error:', e); }}
         if (!text) return;
-        if (isMobile() && navigator.share) {{
-            navigator.share({{ text: text }}).then(function() {{
-                showCopied(btn);
-            }}).catch(function() {{
-                fallbackCopy(text, btn);
-            }});
+        
+        if (isMobile()) {{
+            if (navigator.share) {{
+                try {{
+                    navigator.share({{ text: text }}).then(function() {{
+                        showCopied(btn);
+                    }}).catch(function() {{
+                        showOverlay(text);
+                    }});
+                    return;
+                }} catch(e) {{ /* share 동기 에러 — overlay로 */ }}
+            }}
+            showOverlay(text);
             return;
         }}
         fallbackCopy(text, btn);
     }}
+    
+    /* ★ FIX 3: fallbackCopy — 모든 단계에 try-catch, 최종 overlay 보장 */
     function fallbackCopy(text, btn) {{
-        var ta = document.createElement('textarea');
-        ta.value = text;
-        ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
-        document.body.appendChild(ta);
-        ta.focus();
-        ta.select();
-        ta.setSelectionRange(0, 999999);
         var ok = false;
-        try {{ ok = document.execCommand('copy'); }} catch(e) {{}}
-        document.body.removeChild(ta);
+        try {{
+            var ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
+            document.body.appendChild(ta);
+            ta.focus();
+            ta.select();
+            ta.setSelectionRange(0, 999999);
+            try {{ ok = document.execCommand('copy'); }} catch(e) {{}}
+            document.body.removeChild(ta);
+        }} catch(e) {{ console.error('execCommand copy error:', e); }}
         if (ok) {{
             showCopied(btn);
             return;
         }}
-        if (navigator.clipboard && navigator.clipboard.writeText) {{
-            navigator.clipboard.writeText(text).then(function() {{
-                showCopied(btn);
-            }}).catch(function() {{
-                showOverlay(text);
-            }});
-            return;
-        }}
+        try {{
+            if (navigator.clipboard && navigator.clipboard.writeText) {{
+                navigator.clipboard.writeText(text).then(function() {{
+                    showCopied(btn);
+                }}).catch(function() {{
+                    showOverlay(text);
+                }});
+                return;
+            }}
+        }} catch(e) {{ console.error('clipboard API error:', e); }}
         showOverlay(text);
     }}
+    
+    /* ★ FIX 4: showOverlay — readOnly 해제 + null 체크 */
     function showOverlay(text) {{
-        var ov = document.getElementById('clip-overlay');
-        var ta = document.getElementById('clip-ta');
-        ta.value = text;
-        ov.style.display = 'flex';
-        setTimeout(function() {{ ta.focus(); ta.select(); ta.setSelectionRange(0, 999999); }}, 100);
+        try {{
+            var ov = document.getElementById('clip-overlay');
+            var ta = document.getElementById('clip-ta');
+            if (!ov || !ta) {{ console.error('showOverlay: DOM not found'); return; }}
+            ta.readOnly = false;
+            ta.value = text;
+            ov.style.display = 'flex';
+            setTimeout(function() {{
+                ta.focus(); ta.select();
+                try {{ ta.setSelectionRange(0, 999999); }} catch(e) {{}}
+            }}, 150);
+        }} catch(e) {{ console.error('showOverlay error:', e); }}
     }}
+    
+    /* ★ FIX 5: doCopyOverlay — clipboard API 우선 + execCommand 후순위 */
     function doCopyOverlay() {{
         var ta = document.getElementById('clip-ta');
-        var text = ta.value;
-        var tmp = document.createElement('textarea');
-        tmp.value = text;
-        tmp.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
-        document.body.appendChild(tmp);
-        tmp.focus();
-        tmp.select();
-        tmp.setSelectionRange(0, 999999);
-        var ok = false;
-        try {{ ok = document.execCommand('copy'); }} catch(e) {{}}
-        document.body.removeChild(tmp);
-        if (!ok) {{
-            ta.readOnly = false;
-            ta.focus(); ta.select(); ta.setSelectionRange(0, 999999);
-            try {{ ok = document.execCommand('copy'); }} catch(e2) {{}}
-            ta.readOnly = true;
-        }}
         var btn = document.getElementById('clip-copy-btn');
-        btn.textContent = ok ? '✅ 복사 완료!' : '⚠️ 텍스트를 직접 선택 후 Ctrl+C';
-        btn.style.background = ok ? '#22C55E' : '#f59e0b'; btn.style.color = '#fff';
+        if (!ta || !btn) return;
+        var text = ta.value;
+        
+        try {{
+            if (navigator.clipboard && navigator.clipboard.writeText) {{
+                navigator.clipboard.writeText(text).then(function() {{
+                    btn.textContent = '✅ 복사 완료!';
+                    btn.style.background = '#22C55E'; btn.style.color = '#fff';
+                    setTimeout(function() {{
+                        document.getElementById('clip-overlay').style.display = 'none';
+                        btn.textContent = '📋 복사하기';
+                        btn.style.background = '#FEE500'; btn.style.color = '#3C1E1E';
+                    }}, 1200);
+                }}).catch(function() {{
+                    tryExecCopy(ta, btn);
+                }});
+                return;
+            }}
+        }} catch(e) {{}}
+        tryExecCopy(ta, btn);
+    }}
+    function tryExecCopy(ta, btn) {{
+        var ok = false;
+        try {{
+            ta.readOnly = false;
+            ta.focus(); ta.select();
+            ta.setSelectionRange(0, 999999);
+            try {{ ok = document.execCommand('copy'); }} catch(e) {{}}
+        }} catch(e) {{}}
         if (ok) {{
+            btn.textContent = '✅ 복사 완료!';
+            btn.style.background = '#22C55E'; btn.style.color = '#fff';
             setTimeout(function() {{
                 document.getElementById('clip-overlay').style.display = 'none';
                 btn.textContent = '📋 복사하기';
                 btn.style.background = '#FEE500'; btn.style.color = '#3C1E1E';
             }}, 1200);
         }} else {{
+            btn.textContent = '⚠️ 텍스트를 길게 눌러 복사하세요';
+            btn.style.background = '#f59e0b'; btn.style.color = '#fff';
             ta.readOnly = false;
-            ta.focus(); ta.select(); ta.setSelectionRange(0, 999999);
+            ta.focus(); ta.select();
+            try {{ ta.setSelectionRange(0, 999999); }} catch(e) {{}}
         }}
     }}
+    
     function showCopied(btn) {{
+        if (!btn) return;
         var orig = btn.innerHTML;
         btn.classList.add('copied');
         btn.innerHTML = '✅ 복사 완료!';
         setTimeout(function() {{ btn.classList.remove('copied'); btn.innerHTML = orig; }}, 1500);
     }}
+    
+    /* ★ FIX 6: showPrize — alert 제거, null 체크, try-catch */
     function showPrize(idx, evt) {{
         if (evt) evt.stopPropagation();
-        var h = prizeHtml[idx];
-        if (!h) {{ alert('시상금 데이터가 없습니다.'); return; }}
-        document.getElementById('prize-content').innerHTML = h;
-        document.getElementById('prize-overlay').style.display = 'flex';
+        try {{
+            var h = (prizeHtml && prizeHtml[idx]) || '';
+            var el = document.getElementById('prize-content');
+            var ov = document.getElementById('prize-overlay');
+            if (!el || !ov) {{ console.error('showPrize: DOM not found'); return; }}
+            if (!h) {{ el.innerHTML = '<p style="color:#888;text-align:center;padding:20px;">시상금 데이터가 없습니다.</p>'; }}
+            else {{ el.innerHTML = h; }}
+            ov.style.display = 'flex';
+        }} catch(e) {{ console.error('showPrize error:', e); }}
     }}
     
     function applyFreeze() {{
@@ -1456,12 +1500,10 @@ if menu == "관리자 화면 (설정)":
                         else:
                             st.session_state['data_date'] = datetime.now().strftime("%Y.%m.%d")
                         
-                        # ── 1단계: 파일1 + 파일2 outer merge ──
                         df1['merge_key1'] = df1[key1].apply(clean_key)
                         df2['merge_key2'] = df2[key2].apply(clean_key)
                         df_merged = pd.merge(df1, df2, left_on='merge_key1', right_on='merge_key2', how='outer', suffixes=('_파일1', '_파일2'))
                         
-                        # 중복 열 통합 (파일1+파일2)
                         cols_1 = [c for c in df_merged.columns if c.endswith('_파일1')]
                         for c1 in cols_1:
                             base = c1.replace('_파일1', '')
@@ -1470,15 +1512,12 @@ if menu == "관리자 화면 (설정)":
                                 df_merged[base] = df_merged[c1].combine_first(df_merged[c2])
                                 df_merged.drop(columns=[c1, c2], inplace=True)
                         
-                        # 통합 검색 키 (파일1+파일2)
                         df_merged['_unified_search_key'] = df_merged['merge_key1'].combine_first(df_merged['merge_key2'])
                         
-                        # ── 2단계: 파일3이 있으면 추가 outer merge ──
                         if df3 is not None and key3 is not None:
                             df3['merge_key3'] = df3[key3].apply(clean_key)
                             df_merged = pd.merge(df_merged, df3, left_on='_unified_search_key', right_on='merge_key3', how='outer', suffixes=('', '_파일3'))
                             
-                            # 중복 열 통합 (기존 + 파일3)
                             cols_3 = [c for c in df_merged.columns if c.endswith('_파일3')]
                             for c3 in cols_3:
                                 base = c3.replace('_파일3', '')
@@ -1488,7 +1527,6 @@ if menu == "관리자 화면 (설정)":
                                 else:
                                     df_merged.rename(columns={c3: base}, inplace=True)
                             
-                            # 통합 검색 키 업데이트 (파일3 포함)
                             if 'merge_key3' in df_merged.columns:
                                 df_merged['_unified_search_key'] = df_merged['_unified_search_key'].combine_first(df_merged['merge_key3'])
                             
@@ -2208,14 +2246,12 @@ elif menu == "매니저 화면 (로그인)":
                 
                 col_groups = st.session_state.get('col_groups', [])
                 
-                # ★★★ 수정된 시상금 계산: 각 행의 에이전트 고유 코드 사용 ★★★
                 prize_data_map = {}
                 try:
                     prize_config = st.session_state.get('prize_config', [])
                     if prize_config:
                         df_full = st.session_state.get('df_merged', pd.DataFrame())
                         if not df_full.empty:
-                            # prize_config에서 사용하는 코드 열(col_code) 수집
                             prize_code_cols = list(dict.fromkeys(
                                 c.get('col_code', '') for c in prize_config if c.get('col_code')
                             ))
@@ -2223,7 +2259,6 @@ elif menu == "매니저 화면 (로그인)":
                             for row_idx, (_, row) in enumerate(final_df.iterrows()):
                                 orig_idx = row.name
                                 if orig_idx in my_df.index:
-                                    # 각 prize config의 col_code에서 해당 행의 에이전트 코드 읽기
                                     agent_code = ''
                                     for pc_col in prize_code_cols:
                                         if pc_col in my_df.columns:
@@ -2231,7 +2266,6 @@ elif menu == "매니저 화면 (로그인)":
                                             if not pd.isna(raw_code) and clean_key(str(raw_code)):
                                                 agent_code = clean_key(str(raw_code))
                                                 break
-                                    # fallback: 설계사코드/사번 열 검색
                                     if not agent_code:
                                         for c in my_df.columns:
                                             if '설계사코드' in c or '사번' in c or '설계사조직코드' in c:
