@@ -33,14 +33,17 @@ st.markdown("""
 
 # ── 함수 ──
 def normalize_phone(raw):
-    """전화번호 정규화: 하이픈 제거, 국제번호 변환"""
+    """전화번호 정규화: 하이픈 제거, 국제번호 변환, 앞자리 0 복원"""
     if pd.isna(raw):
         return ""
-    s = re.sub(r"[^0-9+]", "", str(raw))
+    s = re.sub(r"[^0-9+]", "", str(raw).strip())
     if s.startswith("+82"):
         s = "0" + s[3:]
     elif s.startswith("82") and len(s) > 10:
         s = "0" + s[2:]
+    # 엑셀에서 숫자로 저장되어 앞자리 0이 빠진 경우 복원
+    if not s.startswith("0") and len(s) >= 9:
+        s = "0" + s
     return s
 
 
