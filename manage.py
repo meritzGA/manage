@@ -442,6 +442,26 @@ def calculate_prize_for_code(target_code, prize_config, df_src):
                 results.append({"name": cfg['name'], "category": "weekly", "type": "브릿지2",
                     "val": val_prev, "val_curr": val_curr, "tier": tier_achieved, "rate": calc_rate, "prize": prize,
                     "curr_req": curr_req, "next_tier": next_tier, "shortfall": shortfall, "curr_met": curr_met})
+            elif "주차브릿지" in p_type:
+                w3 = _safe_float_prize(_first_valid(match_df, cfg.get('col_val_w3', '')))
+                w3_label = cfg.get('w3_label', '3주')
+                w4_label = cfg.get('w4_label', '4주')
+                wb_tiers = cfg.get('weekly_bridge_tiers', [])
+                tier_achieved = 0; projected_prize = 0
+                for threshold, prize_amt in wb_tiers:
+                    if w3 >= threshold:
+                        tier_achieved = threshold; projected_prize = prize_amt; break
+                next_tier = None; next_tier_prize = 0
+                for threshold, prize_amt in reversed(wb_tiers):
+                    if w3 < threshold: next_tier = threshold; next_tier_prize = prize_amt; break
+                shortfall = max(0, (next_tier or 0) - w3) if next_tier else 0
+                if w3 == 0: continue
+                results.append({
+                    "name": cfg['name'], "category": "weekly", "type": "주차브릿지",
+                    "val_w3": w3, "tier": tier_achieved, "prize": projected_prize,
+                    "next_tier": next_tier, "next_tier_prize": next_tier_prize if next_tier else 0,
+                    "shortfall": shortfall, "w3_label": w3_label, "w4_label": w4_label
+                })
             else:
                 if not prize_details: continue
                 val = _safe_float_prize(_first_valid(match_df, cfg.get('col_val', '')))
@@ -455,8 +475,8 @@ def calculate_prize_for_code(target_code, prize_config, df_src):
                 "val": val, "prize": prize, "prize_details": prize_details})
     
     cumul_sum = sum(r['prize'] for r in results if r['category'] == 'cumulative')
-    bridge_sum = sum(r['prize'] for r in results if r['category'] == 'weekly' and '브릿지' in r['type'])
-    total = cumul_sum + bridge_sum
+    weekly_sum = sum(r['prize'] for r in results if r['category'] == 'weekly')
+    total = cumul_sum + weekly_sum
     return results, total
 
 def format_prize_clip_text(results, total):
@@ -465,17 +485,19 @@ def format_prize_clip_text(results, total):
     bridge_res = [r for r in results if r['category'] == 'weekly' and '브릿지' in r['type']]
     cumul_res = [r for r in results if r['category'] == 'cumulative']
     cumul_sum = sum(r['prize'] for r in cumul_res)
+    gugan_sum = sum(r['prize'] for r in gugan_res)
     bridge_sum = sum(r['prize'] for r in bridge_res)
     
     lines = ["", "💰 예상 시상금 현황", f"  총 시상금: {total:,.0f}원"]
-    if cumul_sum > 0 or bridge_sum > 0:
+    if cumul_sum > 0 or gugan_sum > 0 or bridge_sum > 0:
         parts = []
         if cumul_sum > 0: parts.append(f"누계 {cumul_sum:,.0f}")
+        if gugan_sum > 0: parts.append(f"주차 {gugan_sum:,.0f}")
         if bridge_sum > 0: parts.append(f"브릿지 {bridge_sum:,.0f}")
         lines.append(f"  ({' + '.join(parts)})")
     for r in gugan_res:
         if r['prize'] > 0:
-            lines.append(f"  {r['name']}: {r['prize']:,.0f}원 (누계포함)")
+            lines.append(f"  {r['name']}: {r['prize']:,.0f}원")
             for d in r.get('prize_details', []):
                 lines.append(f"    · {d['label']}: {d['amount']:,.0f}원")
     for r in bridge_res:
@@ -490,6 +512,12 @@ def format_prize_clip_text(results, total):
                     lines.append(f"    당월실적: {v_curr:,.0f}원 ❌ {r.get('curr_req',100000)-v_curr:,.0f}원 부족")
                 if r.get('shortfall', 0) > 0:
                     lines.append(f"    🚀 다음 구간까지 {r['shortfall']:,.0f}원")
+            elif r['type'] == '주차브릿지':
+                w3l = r.get('w3_label','3주'); w4l = r.get('w4_label','4주')
+                lines.append(f"  {r['name']}: {r['prize']:,.0f}원 ({w4l} 동일 가동 시)")
+                lines.append(f"    {w3l} 실적: {r.get('val_w3',0):,.0f}원 (구간: {r.get('tier',0):,.0f}원)")
+                if r.get('shortfall', 0) > 0:
+                    lines.append(f"    🚀 {r['shortfall']:,.0f}원 더 하면 → {r.get('next_tier_prize',0):,.0f}원")
             else:
                 lines.append(f"  {r['name']}: {r['prize']:,.0f}원")
                 for d in r.get('prize_details', []):
@@ -515,17 +543,19 @@ def build_prize_card_html(results, total):
     bridge_res = [r for r in results if r['category'] == 'weekly' and '브릿지' in r['type']]
     cumul_res = [r for r in results if r['category'] == 'cumulative']
     cumul_sum = sum(r['prize'] for r in cumul_res)
+    gugan_sum = sum(r['prize'] for r in gugan_res)
     bridge_sum = sum(r['prize'] for r in bridge_res)
     
     h = '<div style="margin-top:8px; padding:10px; background:#fff8f0; border-radius:10px; border:1px solid #ffd4a8;">'
     h += f'<div style="font-weight:800;color:#d9232e;font-size:15px;margin-bottom:2px;">💰 총 시상금: {total:,.0f}원</div>'
-    if cumul_sum > 0 or bridge_sum > 0:
+    if cumul_sum > 0 or gugan_sum > 0 or bridge_sum > 0:
         parts = []
         if cumul_sum > 0: parts.append(f"누계 {cumul_sum:,.0f}")
+        if gugan_sum > 0: parts.append(f"주차 {gugan_sum:,.0f}")
         if bridge_sum > 0: parts.append(f"브릿지 {bridge_sum:,.0f}")
         h += f'<div style="font-size:11px;color:#888;margin-bottom:6px;">({" + ".join(parts)})</div>'
     if gugan_res:
-        h += '<div style="font-size:11px;color:#4e5968;font-weight:700;margin-top:4px;">📌 시책 진행 (누계에 포함)</div>'
+        h += '<div style="font-size:11px;color:#4e5968;font-weight:700;margin-top:4px;">📌 주차 시상</div>'
         for r in gugan_res:
             pz = f"{r['prize']:,.0f}원" if r['prize'] > 0 else "0원"
             h += f'<div class="m-row"><span class="m-label">{r["name"]}</span><span class="m-val" style="color:#888;font-weight:600;">{pz}</span></div>'
@@ -539,6 +569,14 @@ def build_prize_card_html(results, total):
                 h += f'<div class="m-row"><span class="m-label">{label}</span><span class="m-val" style="color:#d9232e;font-weight:700;">{pz}</span></div>'
                 if r.get('shortfall', 0) > 0:
                     h += f'<div class="m-row"><span class="m-label" style="padding-left:10px;font-size:10px;color:#888;">🚀 다음 구간까지 {r["shortfall"]:,.0f}원</span><span class="m-val"></span></div>'
+            elif r['type'] == '주차브릿지':
+                w3l = r.get('w3_label','3주'); w4l = r.get('w4_label','4주')
+                tier_txt = f"{r.get('tier',0):,.0f}원" if r.get('tier',0) > 0 else "미달성"
+                label = f"{r['name']}<br><span style='font-size:10px;color:#888;'>({w4l} 동일 가동 시)</span>"
+                h += f'<div class="m-row"><span class="m-label">{label}</span><span class="m-val" style="color:#d9232e;font-weight:700;">{pz}</span></div>'
+                h += f'<div class="m-row"><span class="m-label" style="padding-left:10px;font-size:11px;">· {w3l} 실적 (구간: {tier_txt})</span><span class="m-val" style="font-size:11px;">{r.get("val_w3",0):,.0f}원</span></div>'
+                if r.get('shortfall', 0) > 0:
+                    h += f'<div class="m-row"><span class="m-label" style="padding-left:10px;font-size:10px;color:#888;">🚀 {r["shortfall"]:,.0f}원 더 하면 → {r.get("next_tier_prize",0):,.0f}원</span><span class="m-val"></span></div>'
             else:
                 h += f'<div class="m-row"><span class="m-label">{r["name"]}</span><span class="m-val" style="color:#d9232e;font-weight:700;">{pz}</span></div>'
                 h += _prize_detail_sub_html(r.get('prize_details', []))
@@ -1003,17 +1041,19 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
             p_bridge = [r for r in p_results if r['category'] == 'weekly' and '브릿지' in r['type']]
             p_cumul = [r for r in p_results if r['category'] == 'cumulative']
             p_cumul_sum = sum(r['prize'] for r in p_cumul)
+            p_gugan_sum = sum(r['prize'] for r in p_gugan)
             p_bridge_sum = sum(r['prize'] for r in p_bridge)
             
             ph = f'<div style="padding:5px;">'
             ph += f'<div style="font-weight:800;color:#d9232e;font-size:18px;margin-bottom:4px;">💰 총 시상금: {p_total:,.0f}원</div>'
-            if p_cumul_sum > 0 or p_bridge_sum > 0:
+            if p_cumul_sum > 0 or p_gugan_sum > 0 or p_bridge_sum > 0:
                 parts = []
                 if p_cumul_sum > 0: parts.append(f"누계 {p_cumul_sum:,.0f}")
+                if p_gugan_sum > 0: parts.append(f"주차 {p_gugan_sum:,.0f}")
                 if p_bridge_sum > 0: parts.append(f"브릿지 {p_bridge_sum:,.0f}")
                 ph += f'<div style="color:#888;font-size:13px;margin-bottom:12px;">({" + ".join(parts)})</div>'
             if p_gugan:
-                ph += '<div style="font-size:12px;color:#4e5968;font-weight:700;margin:8px 0 4px;border-bottom:1px solid #eee;padding-bottom:4px;">📌 시책 진행 현황 (누계에 포함)</div>'
+                ph += '<div style="font-size:12px;color:#4e5968;font-weight:700;margin:8px 0 4px;border-bottom:1px solid #eee;padding-bottom:4px;">📌 주차 시상</div>'
                 for r in p_gugan:
                     pz = f"{r['prize']:,.0f}원" if r['prize'] > 0 else "0원"
                     ph += f'<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0;"><span style="color:#888;">{r["name"]}</span><span style="color:#888;font-weight:600;">{pz}</span></div>'
@@ -1028,6 +1068,13 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
                         ph += f'<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0;"><span style="color:#555;">{r["name"]}<br><span style="font-size:10px;color:#888;">(당월 {int(r.get("curr_req",100000)//10000)}만 가동 시)</span></span><span style="color:#d9232e;font-weight:700;">{pz}</span></div>'
                         if r.get('shortfall', 0) > 0:
                             ph += f'<div style="padding:2px 0 2px 8px;font-size:10px;color:#888;">🚀 다음 구간까지 {r["shortfall"]:,.0f}원</div>'
+                    elif r['type'] == '주차브릿지':
+                        w3l = r.get('w3_label','3주'); w4l = r.get('w4_label','4주')
+                        tier_txt = f"{r.get('tier',0):,.0f}원" if r.get('tier',0) > 0 else "미달성"
+                        ph += f'<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0;"><span style="color:#555;">{r["name"]}<br><span style="font-size:10px;color:#888;">({w4l} 동일 가동 시)</span></span><span style="color:#d9232e;font-weight:700;">{pz}</span></div>'
+                        ph += f'<div style="display:flex;justify-content:space-between;padding:2px 0 2px 12px;"><span style="color:#888;font-size:11px;">{w3l} 실적 (구간: {tier_txt})</span><span style="color:#888;font-size:11px;">{r.get("val_w3",0):,.0f}원</span></div>'
+                        if r.get('shortfall', 0) > 0:
+                            ph += f'<div style="padding:2px 0 2px 8px;font-size:10px;color:#888;">🚀 {r["shortfall"]:,.0f}원 더 하면 → {r.get("next_tier_prize",0):,.0f}원</div>'
                     else:
                         ph += f'<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0;"><span style="color:#555;">{r["name"]}</span><span style="color:#d9232e;font-weight:700;">{pz}</span></div>'
                         if len(r.get('prize_details', [])) > 1:
@@ -1815,8 +1862,9 @@ if menu == "관리자 화면 (설정)":
                 type_idx = 0
                 if "1기간" in cfg.get('type', ''): type_idx = 1
                 elif "2기간" in cfg.get('type', ''): type_idx = 2
+                elif "주차브릿지" in cfg.get('type', ''): type_idx = 3
                 cfg['type'] = st.radio("시책 종류", 
-                    ["구간 시책", "브릿지 시책 (1기간: 시상 확정)", "브릿지 시책 (2기간: 당월 달성 조건)"],
+                    ["구간 시책", "브릿지 시책 (1기간: 시상 확정)", "브릿지 시책 (2기간: 당월 달성 조건)", "주차브릿지 시책 (동일주차 가동)"],
                     index=type_idx, horizontal=True, key=f"ptype_{idx}")
                 
                 cols = available_columns
@@ -1832,10 +1880,29 @@ if menu == "관리자 화면 (설정)":
                     c1, c2 = st.columns(2)
                     with c1: cfg['col_val_prev'] = st.selectbox("전월 브릿지 실적 열 (구간 매칭용)", cols, index=_gi(cfg.get('col_val_prev',''), cols), key=f"pprev2_{idx}")
                     with c2: cfg['col_val_curr'] = st.selectbox("당월 실적 열 (가동 확인용)", cols, index=_gi(cfg.get('col_val_curr',''), cols), key=f"pcurr2_{idx}")
+                elif "주차브릿지" in cfg['type']:
+                    cfg['w3_label'] = st.text_input("기준 주차 라벨", value=cfg.get('w3_label','3주'), key=f"pw3lbl_{idx}")
+                    cfg['w4_label'] = st.text_input("가동 주차 라벨", value=cfg.get('w4_label','4주'), key=f"pw4lbl_{idx}")
+                    cfg['col_val_w3'] = st.selectbox(f"{cfg.get('w3_label','3주')} 실적 컬럼", cols, index=_gi(cfg.get('col_val_w3',''), cols), key=f"pcvalw3_{idx}")
+                    st.caption(f"💡 {cfg.get('w3_label','3주')} 실적 기준, {cfg.get('w4_label','4주')} 동일 가동 시 예상 시상금")
+                    st.write("📈 구간 설정 (동일 가동 기준금액, 시상금)")
+                    wb_tiers = cfg.get('weekly_bridge_tiers', [(500000,3000000),(300000,1500000),(200000,800000),(100000,200000)])
+                    ts = "\n".join([f"{int(t[0])},{int(t[1])}" for t in wb_tiers])
+                    ti = st.text_area("엔터로 줄바꿈 (기준금액,시상금)", value=ts, height=120, key=f"pwbtier_{idx}")
+                    try:
+                        nt = []
+                        for line in ti.strip().split('\n'):
+                            if ',' in line:
+                                p = line.split(',')
+                                nt.append((float(p[0].strip()), float(p[1].strip())))
+                        cfg['weekly_bridge_tiers'] = sorted(nt, key=lambda x: x[0], reverse=True)
+                    except: st.error("형식 오류")
                 else:
                     cfg['col_val'] = st.selectbox("실적 수치 열", cols, index=_gi(cfg.get('col_val',''), cols), key=f"pval_{idx}")
                 
-                if "2기간" in cfg['type']:
+                if "주차브릿지" in cfg['type']:
+                    pass  # 주차브릿지는 자체 구간 테이블로 시상금 산출
+                elif "2기간" in cfg['type']:
                     cfg['curr_req'] = st.number_input("당월 필수 달성 금액 (합산용)", value=float(cfg.get('curr_req', 100000.0)), step=10000.0, key=f"creq2_{idx}")
                     st.write("📈 구간 설정 (달성금액, 지급률%)")
                     tier_str = "\n".join([f"{int(t[0])},{int(t[1])}" for t in cfg.get('tiers', [])])
@@ -2019,12 +2086,20 @@ if menu == "관리자 화면 (설정)":
                             'col_val_prev': c.get('col_val_prev', ''),
                             'col_val_curr': c.get('col_val_curr', ''),
                             'curr_req': float(c.get('curr_req', 100000.0)),
+                            'col_val_w3': c.get('col_val_w3', ''),
+                            'w3_label': c.get('w3_label', '3주'),
+                            'w4_label': c.get('w4_label', '4주'),
                         }
                         raw_tiers = c.get('tiers', [])
                         item['tiers'] = sorted(
                             [(float(t[0]), float(t[1])) for t in raw_tiers],
                             key=lambda x: x[0], reverse=True
                         ) if raw_tiers else []
+                        raw_wb_tiers = c.get('weekly_bridge_tiers', [])
+                        item['weekly_bridge_tiers'] = sorted(
+                            [(float(t[0]), float(t[1])) for t in raw_wb_tiers],
+                            key=lambda x: x[0], reverse=True
+                        ) if raw_wb_tiers else []
                         item['prize_items'] = [{
                             'label': pi.get('label', ''),
                             'col_eligible': pi.get('col_eligible', ''),
@@ -2055,6 +2130,13 @@ if menu == "관리자 화면 (설정)":
                                     st.markdown("**구간:** " + " / ".join(
                                         f"{int(t[0]):,}원→{int(t[1])}%" for t in c['tiers']
                                     ))
+                            elif '주차브릿지' in c['type']:
+                                st.markdown(f"**{c.get('w3_label','3주')} 실적:** `{c.get('col_val_w3','')}`")
+                                st.markdown(f"**{c.get('w4_label','4주')} 동일 가동 시 예상 시상금 산출**")
+                                if c.get('weekly_bridge_tiers'):
+                                    st.markdown("**구간:** " + " / ".join(
+                                        f"{int(t[0]):,}원→{int(t[1]):,}원" for t in c['weekly_bridge_tiers']
+                                    ))
                             elif '1기간' in c['type']:
                                 st.markdown(f"**전월:** `{c['col_val_prev']}` / **당월:** `{c['col_val_curr']}`")
                             elif c['category'] == 'cumulative':
@@ -2069,7 +2151,7 @@ if menu == "관리자 화면 (설정)":
                             
                             if merged_cols:
                                 missing = []
-                                for key in ['col_code', 'col_val', 'col_val_prev', 'col_val_curr']:
+                                for key in ['col_code', 'col_val', 'col_val_prev', 'col_val_curr', 'col_val_w3']:
                                     v = c.get(key, '')
                                     if v and v not in merged_cols:
                                         missing.append(f"`{v}`")
