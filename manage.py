@@ -2402,6 +2402,14 @@ elif menu == "매니저 화면 (로그인)":
                                 return val
                         
                         final_df[c] = final_df[c].apply(format_with_comma_and_hide_zero)
+                    elif '코드' in c or '연도' in c:
+                        def strip_dot_zero(val):
+                        if pd.isna(val) or str(val).strip() == "": return ""
+                        s = str(val).strip()
+                        if s.endswith('.0'):
+                        s = s[:-2]
+                        return s
+                    final_df[c] = final_df[c].apply(strip_dot_zero)
                 
                 col_groups = st.session_state.get('col_groups', [])
                 
