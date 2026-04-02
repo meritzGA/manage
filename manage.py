@@ -640,7 +640,8 @@ def load_file_data(file_bytes, file_name):
         df = pd.read_excel(io.BytesIO(file_bytes))
     df.columns = [decode_excel_text(c) if isinstance(c, str) else c for c in df.columns]
     for col in df.columns:
-        if df[col].dtype == object:
+        # ★ FIX: pandas 3.0+ StringDtype 호환 — 기존 dtype == object → is_string_dtype
+        if pd.api.types.is_string_dtype(df[col]):
             df[col] = df[col].apply(decode_excel_text)
     return df
 
