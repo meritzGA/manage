@@ -395,6 +395,16 @@ def calculate_prize_for_code(target_code, prize_config, df_src):
         if _cc not in df_src.columns:
             df_src[_cc] = df_src[col_code].apply(clean_key)
         match_df = df_src[df_src[_cc] == safe_code]
+        # ★ FIX: col_code 매칭 실패 시 본인고객번호 등 범용 키로 폴백
+        if match_df.empty:
+            for alt_col in ['본인고객번호', '본인고객ID', '_unified_search_key']:
+                if alt_col in df_src.columns:
+                    _ac = f"_pclean_{alt_col}"
+                    if _ac not in df_src.columns:
+                        df_src[_ac] = df_src[alt_col].apply(clean_key)
+                    match_df = df_src[df_src[_ac] == safe_code]
+                    if not match_df.empty:
+                        break
         if match_df.empty:
             continue
         
@@ -488,7 +498,7 @@ def format_prize_clip_text(results, total):
     gugan_sum = sum(r['prize'] for r in gugan_res)
     bridge_sum = sum(r['prize'] for r in bridge_res)
     
-    lines = ["", "💰 예상 시상금 현황", f"  총 시상금: {total:,.0f}원"]
+    lines = ["", f"💰 예상 시상금: {total:,.0f}원"]
     if cumul_sum > 0 or gugan_sum > 0 or bridge_sum > 0:
         parts = []
         if cumul_sum > 0: parts.append(f"누계 {cumul_sum:,.0f}")
@@ -982,15 +992,14 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
         if person_line and not person_line.endswith('님'):
             person_line += ' 팀장님'
         
+        # ★ PATCH 1: 간소화된 멘트 포맷
         lines = []
-        lines.append("📋 메리츠 시상 현황 안내")
         if data_date:
-            lines.append(f"📅 기준일: {data_date}")
-        lines.append("")
+            lines.append(f"📅 {data_date} 기준")
         lines.append(f"👤 {person_line}")
-        lines.append("")
         
-        current_group = None
+        normal_lines = []
+        goal_lines = []
         for c in data_cols:
             if '코드' in c or '번호' in c:
                 continue
@@ -998,24 +1007,19 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
             if not val.strip() or val == '0':
                 continue
             
-            grp = col_to_grp.get(c)
-            is_goal = any(kw in c for kw in goal_keywords)
-            
-            if grp and grp != current_group:
-                if current_group is not None:
-                    lines.append("")
-                lines.append(f"━━ {grp} ━━")
-                current_group = grp
-            elif grp is None and not is_goal and current_group is not None:
-                lines.append("")
-                current_group = None
-            
             if '부족금액' in c:
-                lines.append(f"🔴 {c}: {val}")
+                goal_lines.append(f"  🔴 {c}: {val}")
             elif '다음목표' in c:
-                lines.append(f"🎯 {c}: {val}")
+                goal_lines.append(f"  🎯 {c}: {val}")
             else:
-                lines.append(f"  {c}: {val}")
+                normal_lines.append(f"  ▸ {c}: {val}")
+        
+        if normal_lines:
+            lines.append("")
+            lines.extend(normal_lines)
+        if goal_lines:
+            lines.append("")
+            lines.extend(goal_lines)
         
         if prize_data_map and row_idx in prize_data_map:
             p_results, p_total = prize_data_map[row_idx]
@@ -1213,108 +1217,125 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
     </div>
     """
 
+    # ★ FIX: 데이터를 hidden div에 저장 (script 태그 사용 시 </script> 충돌 방지)
+    html += f'<div id="__clipB64" style="display:none">{clip_b64}</div>\n'
+    html += f'<div id="__prizeB64" style="display:none">{prize_b64}</div>\n'
+
     html += f"""
     <script>
     var FC_DESKTOP = {freeze_count};
     var FC = FC_DESKTOP;
-    var clipData = JSON.parse(decodeURIComponent(escape(atob("{clip_b64}"))));
-    var prizeHtml = JSON.parse(decodeURIComponent(escape(atob("{prize_b64}"))));
+    var clipData = [];
+    var prizeHtml = [];
+    var _jsOk = false;
     
     function isMobile() {{ return window.innerWidth <= 768; }}
-    
+
+    /* ── 데이터 로딩 (DOM에서 base64 읽기) ── */
+    function _loadData() {{
+        try {{
+            var ce = document.getElementById('__clipB64');
+            var pe = document.getElementById('__prizeB64');
+            if (!ce || !pe) {{ console.error('Data elements not found'); return; }}
+            clipData = JSON.parse(_b64dec(ce.textContent.trim()));
+            prizeHtml = JSON.parse(_b64dec(pe.textContent.trim()));
+            _jsOk = true;
+        }} catch(e) {{
+            console.error('Data load error:', e);
+            _jsOk = false;
+        }}
+    }}
+    function _b64dec(b64) {{
+        try {{
+            var bin = atob(b64);
+            var bytes = new Uint8Array(bin.length);
+            for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            return new TextDecoder('utf-8').decode(bytes);
+        }} catch(e) {{
+            return decodeURIComponent(escape(atob(b64)));
+        }}
+    }}
+
+    /* ── 복사 (데스크탑: 항상 오버레이 / 모바일: share → 오버레이) ── */
     function copyClip(idx, btn, evt) {{
         evt.stopPropagation();
+        if (!_jsOk) {{ alert('데이터를 불러오지 못했습니다. 새로고침 해주세요.'); return; }}
         var text = clipData[idx];
-        if (!text) return;
+        if (!text) {{ alert('복사할 내용이 없습니다.'); return; }}
         if (isMobile() && navigator.share) {{
             navigator.share({{ text: text }}).then(function() {{
-                showCopied(btn);
+                _showBtn(btn, true);
             }}).catch(function() {{
-                fallbackCopy(text, btn);
+                _showOverlay(text);
             }});
             return;
         }}
-        fallbackCopy(text, btn);
+        _showOverlay(text);
     }}
-    function fallbackCopy(text, btn) {{
-        var ta = document.createElement('textarea');
-        ta.value = text;
-        ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
-        document.body.appendChild(ta);
-        ta.focus();
-        ta.select();
-        ta.setSelectionRange(0, 999999);
-        var ok = false;
-        try {{ ok = document.execCommand('copy'); }} catch(e) {{}}
-        document.body.removeChild(ta);
-        if (ok) {{
-            showCopied(btn);
-            return;
-        }}
-        if (navigator.clipboard && navigator.clipboard.writeText) {{
-            navigator.clipboard.writeText(text).then(function() {{
-                showCopied(btn);
-            }}).catch(function() {{
-                showOverlay(text);
-            }});
-            return;
-        }}
-        showOverlay(text);
-    }}
-    function showOverlay(text) {{
+    function _showOverlay(text) {{
         var ov = document.getElementById('clip-overlay');
         var ta = document.getElementById('clip-ta');
         ta.value = text;
         ov.style.display = 'flex';
-        setTimeout(function() {{ ta.focus(); ta.select(); ta.setSelectionRange(0, 999999); }}, 100);
+        setTimeout(function() {{ ta.focus(); ta.select(); ta.setSelectionRange(0, ta.value.length); }}, 100);
     }}
     function doCopyOverlay() {{
         var ta = document.getElementById('clip-ta');
         var text = ta.value;
-        var tmp = document.createElement('textarea');
-        tmp.value = text;
-        tmp.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
-        document.body.appendChild(tmp);
-        tmp.focus();
-        tmp.select();
-        tmp.setSelectionRange(0, 999999);
+        var ok = false;
+        /* 1차: Clipboard API */
+        if (navigator.clipboard && navigator.clipboard.writeText) {{
+            navigator.clipboard.writeText(text).then(function() {{
+                _overlayDone(true);
+            }}).catch(function() {{
+                _tryCmdCopy(ta, text);
+            }});
+            return;
+        }}
+        _tryCmdCopy(ta, text);
+    }}
+    function _tryCmdCopy(ta, text) {{
+        /* 2차: execCommand */
+        ta.readOnly = false;
+        ta.focus(); ta.select(); ta.setSelectionRange(0, ta.value.length);
         var ok = false;
         try {{ ok = document.execCommand('copy'); }} catch(e) {{}}
-        document.body.removeChild(tmp);
-        if (!ok) {{
-            ta.readOnly = false;
-            ta.focus(); ta.select(); ta.setSelectionRange(0, 999999);
-            try {{ ok = document.execCommand('copy'); }} catch(e2) {{}}
-            ta.readOnly = true;
-        }}
+        if (ok) {{ _overlayDone(true); }}
+        else {{ _overlayDone(false); ta.focus(); ta.select(); ta.setSelectionRange(0, ta.value.length); }}
+    }}
+    function _overlayDone(ok) {{
         var btn = document.getElementById('clip-copy-btn');
-        btn.textContent = ok ? '✅ 복사 완료!' : '⚠️ 텍스트를 직접 선택 후 Ctrl+C';
-        btn.style.background = ok ? '#22C55E' : '#f59e0b'; btn.style.color = '#fff';
         if (ok) {{
+            btn.textContent = '✅ 복사 완료!';
+            btn.style.background = '#22C55E'; btn.style.color = '#fff';
             setTimeout(function() {{
                 document.getElementById('clip-overlay').style.display = 'none';
                 btn.textContent = '📋 복사하기';
                 btn.style.background = '#FEE500'; btn.style.color = '#3C1E1E';
             }}, 1200);
         }} else {{
-            ta.readOnly = false;
-            ta.focus(); ta.select(); ta.setSelectionRange(0, 999999);
+            btn.textContent = '⚠️ Ctrl+C로 직접 복사하세요';
+            btn.style.background = '#f59e0b'; btn.style.color = '#fff';
         }}
     }}
-    function showCopied(btn) {{
+    function _showBtn(btn, ok) {{
         var orig = btn.innerHTML;
         btn.classList.add('copied');
         btn.innerHTML = '✅ 복사 완료!';
         setTimeout(function() {{ btn.classList.remove('copied'); btn.innerHTML = orig; }}, 1500);
     }}
+
+    /* ── 시상금 조회 ── */
     function showPrize(idx, evt) {{
         if (evt) evt.stopPropagation();
+        if (!_jsOk) {{ alert('데이터를 불러오지 못했습니다. 새로고침 해주세요.'); return; }}
         var h = prizeHtml[idx];
         if (!h) {{ alert('시상금 데이터가 없습니다.'); return; }}
         document.getElementById('prize-content').innerHTML = h;
         document.getElementById('prize-overlay').style.display = 'flex';
     }}
-    
+
+    /* ── 열 고정(freeze) ── */
     function applyFreeze() {{
         var t = document.getElementById("{table_id}");
         FC = isMobile() ? Math.min(FC_DESKTOP, 2) : FC_DESKTOP;
@@ -1346,8 +1367,8 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
             if (w) window.frameElement.style.height = Math.min(w.scrollHeight + 4, Math.round(vh * 0.85)) + "px";
         }}
     }}
-    window.addEventListener('load', function() {{ applyFreeze(); autoResize(); }});
-    window.addEventListener('resize', function() {{ applyFreeze(); autoResize(); }});
+
+    /* ── 정렬 ── */
     var ss = {{}};
     function sortTable(th) {{
         var t = document.getElementById("{table_id}");
@@ -1357,7 +1378,8 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
         if (isNaN(ci)) return;
         var asc = ss[ci] !== true; ss = {{}}; ss[ci] = asc;
         rows.sort(function(a, b) {{
-            var aT = a.cells[ci].textContent.trim(), bT = b.cells[ci].textContent.trim();
+            var aT = (a.cells[ci] ? a.cells[ci].textContent : '').trim();
+            var bT = (b.cells[ci] ? b.cells[ci].textContent : '').trim();
             var aN = parseFloat(aT.replace(/,/g,"")), bN = parseFloat(bT.replace(/,/g,""));
             if (aT === "" && bT === "") return 0;
             if (aT === "") return 1; if (bT === "") return -1;
@@ -1375,6 +1397,14 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
         }});
         setTimeout(autoResize, 50);
     }}
+
+    /* ── 초기화 ── */
+    window.addEventListener('load', function() {{
+        _loadData();
+        applyFreeze();
+        autoResize();
+    }});
+    window.addEventListener('resize', function() {{ applyFreeze(); autoResize(); }});
     </script>
     """
     return html
@@ -2454,6 +2484,17 @@ elif menu == "매니저 화면 (로그인)":
                                                     break
                                     if agent_code:
                                         results, total = calculate_prize_for_code(agent_code, prize_config, df_full)
+                                        # ★ FIX: col_code 불일치 시 본인고객번호로 재시도
+                                        if not results:
+                                            for alt in ['본인고객번호', '본인고객ID']:
+                                                if alt in my_df.columns:
+                                                    alt_raw = my_df.loc[orig_idx, alt]
+                                                    if not pd.isna(alt_raw):
+                                                        alt_code = clean_key(str(alt_raw))
+                                                        if alt_code and alt_code != agent_code:
+                                                            results, total = calculate_prize_for_code(alt_code, prize_config, df_full)
+                                                            if results:
+                                                                break
                                         if results:
                                             prize_data_map[row_idx] = (results, total)
                 except Exception as prize_err:
