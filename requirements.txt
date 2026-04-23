@@ -1,7 +1,4 @@
-streamlit
-pandas
-openpyxl
-numpy
-streamlit
-pillow
-qrcode[pil]
+streamlit>=1.30.0
+pandas>=2.0.0
+openpyxl>=3.1.0
+numpy>=1.24.0
