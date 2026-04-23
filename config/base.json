@@ -1,0 +1,99 @@
+{
+  "__comment__": "공통 고정 설정. stage 템플릿들이 이 위에 merge됨. 문자열의 월 숫자는 {m}/{m-1} 플레이스홀더로, 로드 시 현재 월로 치환됨.",
+  "manager_col": "지원매니저코드",
+  "manager_col2": "매니저코드",
+  "manager_name_col": "지원매니저명",
+  "merge_key1_col": "현재대리점설계사조직코드",
+  "merge_key2_col": "대리점설계사조직코드",
+  "merge_key3_col": "대리점설계사조직코드",
+  "admin_categories": [
+    {
+      "conditions": [
+        {
+          "col": "이전월연속가동",
+          "cond": ">0"
+        }
+      ],
+      "name": "1.메클"
+    },
+    {
+      "conditions": [
+        {
+          "col": "이전월연속가동",
+          "cond": "==0"
+        },
+        {
+          "col": "이전월인정실적",
+          "cond": ">0"
+        }
+      ],
+      "name": "2.유실적"
+    },
+    {
+      "conditions": [
+        {
+          "col": "이전월연속가동",
+          "cond": "==0"
+        },
+        {
+          "col": "이전월인정실적",
+          "cond": "==0"
+        },
+        {
+          "col": "인정실적",
+          "cond": ">0"
+        }
+      ],
+      "name": "3.신규"
+    },
+    {
+      "conditions": [
+        {
+          "col": "이전월연속가동",
+          "cond": "==0"
+        },
+        {
+          "col": "이전월인정실적",
+          "cond": "==0"
+        },
+        {
+          "col": "인정실적",
+          "cond": "==0"
+        }
+      ],
+      "name": "4.기타"
+    }
+  ],
+  "admin_cols_common": [
+    {
+      "col": "대리점지사명",
+      "fallback_col": "",
+      "display_name": "대리점지사명",
+      "type": "텍스트",
+      "condition": ""
+    },
+    {
+      "col": "대리점설계사조직코드",
+      "fallback_col": "",
+      "display_name": "팀장님 코드",
+      "type": "텍스트",
+      "condition": ""
+    },
+    {
+      "col": "대리점설계사명",
+      "fallback_col": "",
+      "display_name": "팀장님 이름",
+      "type": "텍스트",
+      "condition": ""
+    },
+    {
+      "col": "이전월인정실적",
+      "fallback_col": "",
+      "display_name": "전월 실적",
+      "type": "텍스트",
+      "condition": ""
+    }
+  ],
+  "admin_goals": [],
+  "clip_footer_default": "팀장님! 이번주 실적 안내드려요.\n이번달도 화이팅 하세요!"
+}
