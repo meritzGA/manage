@@ -3,16 +3,19 @@ auto_loader.py — 데이터 자동 로더 + stage 감지 + 설정 머지
 
 [작동 순서]
   1. data/ 폴더에서 최신 파일 3개 자동 선택 (파일명 YYYYMMDD 기준)
+     - 파일명의 _, -, 공백 유무와 무관하게 매칭
+     - 예) MC_LIST_OUT_20260422.xlsx / MCLISTOUT20260422.xlsx / mc-list-out.xlsx 모두 OK
   2. 3개 파일 outer merge
   3. 병합된 컬럼 + 기준년월로 current_month & stage 자동 감지
   4. config/base.json + config/stages/{stage}.json 로드 (JSON 없으면 .pkl 폴백)
   5. 문자열의 {m}, {m-1} 플레이스홀더를 현재 월 숫자로 치환
   6. base + stage 머지 → 앱 session_state에 주입할 dict 반환
 
-[파일명 규칙]
-  data/MC_LIST_OUT_YYYYMMDD.xlsx
-  data/PRIZE_6_BRIDGE_OUT_YYYYMMDD.xlsx
-  data/PRIZE_SUM_OUT_YYYYMMDD.xlsx
+[파일명 규칙 — 느슨하게 매칭]
+  data/MC_LIST_OUT_YYYYMMDD.xlsx          (권장)
+  data/PRIZE_6_BRIDGE_OUT_YYYYMMDD.xlsx   (권장)
+  data/PRIZE_SUM_OUT_YYYYMMDD.xlsx        (권장)
+  위와 같이 언더스코어가 있어도 되고, 없어도 됨.
 """
 import os
 import re
@@ -30,32 +33,55 @@ DATA_DIR = "data"
 CONFIG_DIR = "config"
 STAGES_DIR = os.path.join(CONFIG_DIR, "stages")
 
-# 파일명 패턴 (prefix, glob)
+# 파일 유형별 "정규화 후 포함되어야 할 토큰들"
+# 파일명에서 _, -, 공백을 모두 제거하고 대문자로 바꾼 뒤 비교하므로
+# MC_LIST_OUT_20260422.xlsx / MCLISTOUT20260422.xlsx / mc-list-out.xlsx 모두 매칭됨
 FILE_PATTERNS = [
-    ("MC_LIST_OUT",        "MC_LIST_OUT_*.xlsx"),
-    ("PRIZE_6_BRIDGE_OUT", "PRIZE_6_BRIDGE_OUT_*.xlsx"),
-    ("PRIZE_SUM_OUT",      "PRIZE_SUM_OUT_*.xlsx"),
+    ("MC_LIST_OUT",        ["MCLISTOUT"]),
+    ("PRIZE_6_BRIDGE_OUT", ["PRIZE6BRIDGEOUT"]),
+    ("PRIZE_SUM_OUT",      ["PRIZESUMOUT"]),
 ]
 
 
 # ──────────────────────────────────────────────────────────────
 # 데이터 파일 스캔
 # ──────────────────────────────────────────────────────────────
+def _normalize_filename(name):
+    """파일명(확장자 제외)에서 _, -, 공백 제거 + 대문자화 → 비교용 키."""
+    stem = os.path.splitext(os.path.basename(name))[0]
+    return re.sub(r"[\s_\-]+", "", stem).upper()
+
+
 def _extract_yyyymmdd(filepath):
     m = re.search(r"(\d{8})", os.path.basename(filepath))
     return m.group(1) if m else "00000000"
 
 
 def find_latest_data_files():
-    """각 패턴별 최신 파일(YYYYMMDD 기준) 1개씩 반환."""
+    """각 유형별 최신 파일 1개씩 반환. 언더스코어 유무와 무관하게 매칭."""
+    # data/ 폴더의 모든 엑셀 파일 (xlsx, xls 모두)
+    all_files = (
+        glob.glob(os.path.join(DATA_DIR, "*.xlsx")) +
+        glob.glob(os.path.join(DATA_DIR, "*.xls"))
+    )
+    # Excel 임시파일(~$로 시작) 제외
+    all_files = [f for f in all_files if not os.path.basename(f).startswith("~$")]
+
     result = {}
-    for key, pattern in FILE_PATTERNS:
-        files = glob.glob(os.path.join(DATA_DIR, pattern))
-        if not files:
+    for key, tokens in FILE_PATTERNS:
+        candidates = [
+            f for f in all_files
+            if all(tok in _normalize_filename(f) for tok in tokens)
+        ]
+        if not candidates:
             result[key] = None
             continue
-        files.sort(key=_extract_yyyymmdd, reverse=True)
-        result[key] = files[0]
+        # YYYYMMDD 있으면 그걸로, 없으면 수정시간으로 최신 우선
+        candidates.sort(
+            key=lambda p: (_extract_yyyymmdd(p), os.path.getmtime(p)),
+            reverse=True,
+        )
+        result[key] = candidates[0]
     return result
 
 
