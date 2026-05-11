@@ -66,7 +66,7 @@ def to_vcard(name, phone, org="", note=""):
         "BEGIN:VCARD",
         "VERSION:3.0",
         f"FN:{vcf_escape(name)}",
-        f"N:{vcf_escape(name)};;;;",
+        f"N:;{vcf_escape(name)};;;",
     ]
     if clean_phone:
         lines.append(f"TEL;TYPE=CELL:{clean_phone}")
@@ -290,7 +290,7 @@ if uploaded:
                 cnt = len(rows)
                 fname = f"{sanitize_filename(manager)}_{cnt}.vcf"
                 arcname = f"{sanitize_filename(branch)}/{fname}"
-                body = "﻿"
+                body = ""  # iOS 호환: BOM 없이 BEGIN:VCARD로 바로 시작
                 for r in rows:
                     fn = f"{r['이름']} ({r['ORG']})" if r["ORG"] else r["이름"]
                     body += to_vcard(fn, r["_clean_phone"] or r["휴대폰"], org=r["ORG"], note=r["메모"])
@@ -325,7 +325,7 @@ st.markdown(
 <b>4.</b> 미리보기 → ZIP 다운로드<br><br>
 📌 <b>예시 (사용인검색목록 양식):</b><br>
 &nbsp;&nbsp;지점=<b>G</b>, 매니저=<b>I</b>, 대리점=<b>K</b>, 지사=<b>M</b>, 이름=<b>P</b>, 휴대폰=<b>AF</b><br>
-&nbsp;&nbsp;헤더 행=2, 데이터 시작 행=3<br><br>
+
 📌 <b>vCard 형식:</b> FN(이름+지사), TEL, ORG(지사), NOTE(메모) — vCard 3.0
 </div>""",
     unsafe_allow_html=True,
