@@ -4,6 +4,8 @@ import re
 import io
 import zipfile
 from collections import defaultdict
+from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter, column_index_from_string
 
 st.set_page_config(page_title="엑셀 → 매니저별 연락처 변환기", page_icon="📇", layout="centered")
 
@@ -35,10 +37,12 @@ st.markdown("""
 
 # ── 함수 ──
 def normalize_phone(raw):
-    """전화번호 정규화: 하이픈 제거, 국제번호 변환, 앞자리 0 복원"""
-    if pd.isna(raw):
+    """전화번호 정규화"""
+    if raw is None or (isinstance(raw, float) and pd.isna(raw)):
         return ""
     s = re.sub(r"[^0-9+]", "", str(raw).strip())
+    if not s:
+        return ""
     if s.startswith("+82"):
         s = "0" + s[3:]
     elif s.startswith("82") and len(s) > 10:
@@ -49,7 +53,6 @@ def normalize_phone(raw):
 
 
 def vcf_escape(s):
-    """vCard 3.0 텍스트 필드 이스케이프"""
     s = str(s)
     s = s.replace("\\", "\\\\")
     s = s.replace("\n", "\\n").replace("\r", "")
@@ -57,8 +60,7 @@ def vcf_escape(s):
     return s
 
 
-def to_vcard(name, phone, org="", nickname="", note=""):
-    """단일 연락처를 vCard 3.0 문자열로 변환"""
+def to_vcard(name, phone, org="", note=""):
     clean_phone = normalize_phone(phone)
     lines = [
         "BEGIN:VCARD",
@@ -70,8 +72,6 @@ def to_vcard(name, phone, org="", nickname="", note=""):
         lines.append(f"TEL;TYPE=CELL:{clean_phone}")
     if org:
         lines.append(f"ORG:{vcf_escape(org)}")
-    if nickname:
-        lines.append(f"NICKNAME:{vcf_escape(nickname)}")
     if note:
         lines.append(f"NOTE:{vcf_escape(note)}")
     lines.append("END:VCARD")
@@ -79,198 +79,207 @@ def to_vcard(name, phone, org="", nickname="", note=""):
 
 
 def sanitize_filename(name):
-    """파일/폴더명에서 OS 금지문자 제거"""
     name = re.sub(r'[<>:"/\\|?*\r\n\t]', "_", str(name))
     return name.strip().rstrip(".") or "_"
 
 
-def detect_column(headers, keywords):
-    """키워드 목록으로 컬럼 자동 감지"""
-    for h in headers:
-        h_lower = str(h).lower().strip()
-        for kw in keywords:
-            if kw in h_lower:
-                return h
-    return None
+def cell_value(v):
+    if v is None:
+        return ""
+    if isinstance(v, float) and pd.isna(v):
+        return ""
+    return str(v).strip()
 
 
-def create_sample_excel():
-    """샘플 엑셀 파일 생성"""
-    df = pd.DataFrame({
-        "지점": ["GA3-1지점", "GA3-1지점", "GA3-1지점", "GA3-4지점", "GA3-4지점"],
-        "매니저": ["김태현", "김태현", "이현정", "권순", "권순"],
-        "대리점": ["A에셋㈜", "A에셋㈜", "B파트너스㈜", "C금융㈜", "C금융㈜"],
-        "지사": ["A에셋㈜(강남)", "A에셋㈜(강남)", "B파트너스㈜ 본사", "C금융㈜(부산)", "C금융㈜(부산)"],
-        "팀장님명": ["홍길동", "김영희", "이철수", "박민수", "정수연"],
-        "휴대폰": ["010-1234-5678", "010-9876-5432", "010-5555-7777", "010-3333-2222", "010-1111-2222"],
-        "메모": ["26년5월", "26년5월", "26년5월", "26년5월", "26년5월"],
-    })
-    buf = io.BytesIO()
-    df.to_excel(buf, index=False, engine="openpyxl")
-    buf.seek(0)
-    return buf
-
-
-# ── 키워드 매핑 ──
-BRANCH_KEYS = ["지점", "branch", "본부"]
-MANAGER_KEYS = ["매니저", "manager", "관리자"]
-AGENCY_KEYS = ["대리점", "agency"]
-SUB_KEYS = ["지사", "subbranch", "sub"]
-NAME_KEYS = ["팀장", "이름", "성명", "name", "담당자"]
-PHONE_KEYS = ["휴대폰", "연락처", "전화번호", "핸드폰", "phone", "tel", "mobile", "번호"]
-NOTE_KEYS = ["메모", "비고", "노트", "note", "memo", "참고", "기타"]
+def col_label(letter, header_preview):
+    if header_preview:
+        return f"{letter} — {header_preview}"
+    return letter
 
 
 # ── UI ──
 st.markdown("## 📇 엑셀 → 매니저별 연락처 변환기")
-st.caption("사용인 리스트를 업로드하면 **지점/매니저별 폴더 구조의 ZIP**으로 변환합니다")
+st.caption("엑셀 **열(A, B, C...)을 직접 선택**하여 지점/매니저별 VCF로 변환합니다")
 
 # Step 1: 파일 업로드
 st.markdown('<span class="step-badge">1</span> **엑셀 파일 업로드**', unsafe_allow_html=True)
 
-col1, col2 = st.columns([3, 1])
-with col2:
-    st.download_button(
-        "📥 양식 다운로드",
-        data=create_sample_excel(),
-        file_name="사용인리스트_양식.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-    )
-
 uploaded = st.file_uploader(
-    "파일 선택 (.xlsx, .xls, .csv)",
-    type=["xlsx", "xls", "csv"],
+    "파일 선택 (.xlsx, .xls)",
+    type=["xlsx", "xls"],
     label_visibility="collapsed",
 )
 
 if uploaded:
-    # 파일 읽기
     try:
-        if uploaded.name.endswith(".csv"):
-            try:
-                df = pd.read_csv(uploaded, encoding="utf-8")
-            except UnicodeDecodeError:
-                uploaded.seek(0)
-                df = pd.read_csv(uploaded, encoding="euc-kr")
-        else:
-            df = pd.read_excel(uploaded, engine="openpyxl")
+        wb = load_workbook(uploaded, data_only=True, read_only=False)
     except Exception as e:
         st.error(f"파일을 읽을 수 없습니다: {e}")
         st.stop()
 
-    # 헤더가 첫 행이 아닌 경우 자동 탐지 (앞부분에 빈 행이 있을 때)
-    if df.columns.isnull().any() or all(str(c).startswith("Unnamed") for c in df.columns):
-        try:
-            uploaded.seek(0)
-            for skip in range(0, 5):
-                uploaded.seek(0)
-                tmp = pd.read_excel(uploaded, engine="openpyxl", skiprows=skip)
-                if not any(str(c).startswith("Unnamed") for c in tmp.columns):
-                    df = tmp
-                    break
-        except Exception:
-            pass
+    sheet_names = wb.sheetnames
+    if len(sheet_names) > 1:
+        sheet_name = st.selectbox("시트 선택", options=sheet_names, index=0)
+    else:
+        sheet_name = sheet_names[0]
+    ws = wb[sheet_name]
 
-    if df.empty:
-        st.warning("데이터가 없습니다. 엑셀 파일을 확인해주세요.")
-        st.stop()
+    max_col = ws.max_column
+    max_row = ws.max_row
+    st.caption(f"시트: **{sheet_name}** · 열: {max_col}개 · 행: {max_row}행")
 
-    headers = list(df.columns)
-
-    # Step 2: 컬럼 매핑
+    # Step 2: 헤더/데이터 시작 행
     st.markdown("---")
-    st.markdown('<span class="step-badge">2</span> **컬럼 매핑 확인**', unsafe_allow_html=True)
-
-    auto_branch = detect_column(headers, BRANCH_KEYS)
-    auto_manager = detect_column(headers, MANAGER_KEYS)
-    auto_agency = detect_column(headers, AGENCY_KEYS)
-    auto_sub = detect_column(headers, SUB_KEYS)
-    auto_name = detect_column(headers, NAME_KEYS)
-    auto_phone = detect_column(headers, PHONE_KEYS)
-    auto_note = detect_column(headers, NOTE_KEYS)
-
-    options_with_none = ["— 선택 안함 —"] + headers
-
-    def sel(label, auto, required=False):
-        idx = options_with_none.index(auto) if auto in options_with_none else 0
-        suffix = " *" if required else ""
-        return st.selectbox(label + suffix, options=options_with_none, index=idx)
+    st.markdown('<span class="step-badge">2</span> **헤더 행 / 데이터 시작 행**', unsafe_allow_html=True)
 
     c1, c2 = st.columns(2)
     with c1:
-        branch_col = sel("지점", auto_branch, required=True)
-        agency_col = sel("대리점", auto_agency)
-        name_col = sel("팀장명/이름", auto_name, required=True)
-        note_col = sel("메모", auto_note)
+        header_row = st.number_input(
+            "헤더로 보여줄 행 (1부터)",
+            min_value=1, max_value=min(20, max_row), value=min(2, max_row), step=1,
+        )
     with c2:
-        manager_col = sel("매니저", auto_manager, required=True)
-        sub_col = sel("지사", auto_sub)
-        phone_col = sel("휴대폰", auto_phone, required=True)
+        data_start_row = st.number_input(
+            "데이터 시작 행 (1부터)",
+            min_value=1, max_value=max_row, value=min(int(header_row) + 1, max_row), step=1,
+        )
 
-    # None 처리
-    def n(v): return None if v == "— 선택 안함 —" else v
-    branch_col = n(branch_col)
-    manager_col = n(manager_col)
-    agency_col = n(agency_col)
-    sub_col = n(sub_col)
-    name_col = n(name_col)
-    phone_col = n(phone_col)
-    note_col = n(note_col)
+    # 헤더 미리보기
+    header_preview = {}
+    header_cells = list(ws.iter_rows(min_row=int(header_row), max_row=int(header_row), values_only=True))[0]
+    for idx, val in enumerate(header_cells, start=1):
+        letter = get_column_letter(idx)
+        header_preview[letter] = cell_value(val)
 
-    if not (branch_col and manager_col and name_col and phone_col):
-        st.warning("지점, 매니저, 팀장명, 휴대폰 컬럼은 필수입니다.")
+    all_letters = [get_column_letter(i) for i in range(1, max_col + 1)]
+    col_options = ["— 선택 안함 —"] + [col_label(l, header_preview.get(l, "")) for l in all_letters]
+    letter_for_option = {col_label(l, header_preview.get(l, "")): l for l in all_letters}
+
+    def pick_default(keywords):
+        for l in all_letters:
+            h = header_preview.get(l, "")
+            for kw in keywords:
+                if kw and kw in h:
+                    return col_label(l, h)
+        return None
+
+    BRANCH_KW = ["지점"]
+    MANAGER_KW = ["매니저"]
+    AGENCY_KW = ["대리점"]
+    SUB_KW = ["지사"]
+    NAME_KW = ["이름", "팀장", "성명"]
+    PHONE_KW = ["휴대전화", "휴대폰", "연락처", "전화"]
+    NOTE_KW = ["메모", "비고", "직책"]
+
+    # Step 3: 열 매핑
+    st.markdown("---")
+    st.markdown('<span class="step-badge">3</span> **열(A, B, C...) 매핑**', unsafe_allow_html=True)
+    st.caption("실제 엑셀 열 문자를 골라주세요. 헤더 미리보기가 함께 표시됩니다.")
+
+    def select_col(label, default_keywords, required=False):
+        default = pick_default(default_keywords)
+        idx = col_options.index(default) if default in col_options else 0
+        suf = " *" if required else ""
+        return st.selectbox(label + suf, options=col_options, index=idx, key=f"sel_{label}")
+
+    cA, cB = st.columns(2)
+    with cA:
+        branch_sel = select_col("지점", BRANCH_KW, required=True)
+        agency_sel = select_col("대리점", AGENCY_KW)
+        name_sel = select_col("이름(팀장명)", NAME_KW, required=True)
+        note_sel = select_col("메모", NOTE_KW)
+    with cB:
+        manager_sel = select_col("매니저", MANAGER_KW, required=True)
+        sub_sel = select_col("지사", SUB_KW)
+        phone_sel = select_col("휴대폰", PHONE_KW, required=True)
+
+    def to_letter(sel):
+        return letter_for_option.get(sel) if sel != "— 선택 안함 —" else None
+
+    L_BRANCH = to_letter(branch_sel)
+    L_MANAGER = to_letter(manager_sel)
+    L_AGENCY = to_letter(agency_sel)
+    L_SUB = to_letter(sub_sel)
+    L_NAME = to_letter(name_sel)
+    L_PHONE = to_letter(phone_sel)
+    L_NOTE = to_letter(note_sel)
+
+    if not (L_BRANCH and L_MANAGER and L_NAME and L_PHONE):
+        st.warning("지점·매니저·이름·휴대폰 컬럼은 필수입니다.")
         st.stop()
 
-    # 유효 데이터 필터
-    valid_df = df[df[name_col].notna() & df[phone_col].notna() & df[branch_col].notna()].copy()
-    valid_df["_전화번호"] = valid_df[phone_col].apply(normalize_phone)
-    valid_df = valid_df[valid_df["_전화번호"] != ""].copy()
+    # Step 4: 추가 옵션
+    st.markdown("---")
+    st.markdown('<span class="step-badge">4</span> **추가 옵션**', unsafe_allow_html=True)
 
-    # Step 3: 미리보기 & 통계
+    oc1, oc2 = st.columns(2)
+    with oc1:
+        extra_note = st.text_input("메모에 추가로 붙일 텍스트 (선택)", value="")
+    with oc2:
+        skip_no_phone = st.checkbox("휴대폰이 없으면 제외", value=True)
+
+    # 데이터 수집
+    def col_idx(letter):
+        return column_index_from_string(letter) if letter else None
+
+    iB = col_idx(L_BRANCH); iM = col_idx(L_MANAGER)
+    iA = col_idx(L_AGENCY); iS = col_idx(L_SUB)
+    iN = col_idx(L_NAME); iP = col_idx(L_PHONE); iNote = col_idx(L_NOTE)
+
+    rows_data = []
+    for row in ws.iter_rows(min_row=int(data_start_row), max_row=max_row, values_only=True):
+        def g(idx):
+            if idx is None or idx > len(row): return ""
+            return cell_value(row[idx - 1])
+        branch = g(iB); manager = g(iM)
+        agency = g(iA); sub = g(iS)
+        name = g(iN); phone_raw = g(iP); note = g(iNote)
+        if not branch or not name:
+            continue
+        clean_phone = normalize_phone(phone_raw)
+        if skip_no_phone and not clean_phone:
+            continue
+        org = sub or agency
+        final_note = note
+        if extra_note:
+            final_note = (note + " " + extra_note).strip() if note else extra_note
+        rows_data.append({
+            "지점": branch,
+            "매니저": manager or "_매니저미지정",
+            "대리점": agency, "지사": sub,
+            "이름": name, "휴대폰": clean_phone or phone_raw,
+            "_clean_phone": clean_phone,
+            "ORG": org, "메모": final_note,
+        })
+
+    if not rows_data:
+        st.warning("유효한 데이터가 없습니다. 컬럼 매핑과 데이터 시작 행을 확인해주세요.")
+        st.stop()
+
+    # Step 5: 미리보기 & 통계
     st.markdown("---")
     st.markdown(
-        f'<span class="step-badge">3</span> **미리보기 & 통계** &nbsp; <span class="count-badge">👤 {len(valid_df)}건</span>',
+        f'<span class="step-badge">5</span> **미리보기 & 통계** &nbsp; <span class="count-badge">👤 {len(rows_data)}건</span>',
         unsafe_allow_html=True,
     )
 
-    # 지점/매니저별 인원 수
-    summary = (
-        valid_df.assign(
-            _매니저=valid_df[manager_col].fillna("(미지정)").replace("", "(미지정)")
-        )
-        .groupby([branch_col, "_매니저"]).size().reset_index(name="인원수")
-        .sort_values([branch_col, "_매니저"])
-    )
-    summary.columns = ["지점", "매니저", "인원수"]
-    st.dataframe(summary, use_container_width=True, hide_index=True, height=300)
+    preview_df = pd.DataFrame(rows_data)[["지점", "매니저", "지사", "대리점", "이름", "휴대폰", "메모"]]
+    st.dataframe(preview_df.head(15), use_container_width=True, hide_index=True)
+    if len(preview_df) > 15:
+        st.caption(f"... 외 {len(preview_df) - 15}건 더")
 
-    # Step 4: ZIP 생성
+    summary = preview_df.groupby(["지점", "매니저"]).size().reset_index(name="인원수")
+    st.caption("**지점 · 매니저별 인원수**")
+    st.dataframe(summary, use_container_width=True, hide_index=True, height=260)
+
+    # Step 6: ZIP 생성
     st.markdown("---")
-    st.markdown('<span class="step-badge">4</span> **VCF ZIP 생성**', unsafe_allow_html=True)
+    st.markdown('<span class="step-badge">6</span> **VCF ZIP 생성**', unsafe_allow_html=True)
 
-    # 지점 → 매니저 → 레코드 그룹화
     groups = defaultdict(lambda: defaultdict(list))
-    for _, row in valid_df.iterrows():
-        branch = str(row[branch_col]).strip()
-        manager = row[manager_col]
-        manager = str(manager).strip() if pd.notna(manager) and str(manager).strip() else "_매니저미지정"
-        name = str(row[name_col]).strip()
-        phone = row["_전화번호"]
-        # 소속 = 지사 우선, 없으면 대리점
-        org = ""
-        if sub_col and pd.notna(row[sub_col]) and str(row[sub_col]).strip():
-            org = str(row[sub_col]).strip()
-        elif agency_col and pd.notna(row[agency_col]) and str(row[agency_col]).strip():
-            org = str(row[agency_col]).strip()
-        note = ""
-        if note_col and pd.notna(row[note_col]) and str(row[note_col]).strip():
-            note = str(row[note_col]).strip()
-        # FN: "이름 (소속)" 형식
-        fn = f"{name} ({org})" if org else name
-        groups[branch][manager].append((fn, phone, org, note))
+    for r in rows_data:
+        groups[r["지점"]][r["매니저"]].append(r)
 
-    # ZIP 빌드 (UTF-8 BOM + vCards per manager)
     zip_buf = io.BytesIO()
     file_count = 0
     contact_count = 0
@@ -281,13 +290,13 @@ if uploaded:
                 cnt = len(rows)
                 fname = f"{sanitize_filename(manager)}_{cnt}.vcf"
                 arcname = f"{sanitize_filename(branch)}/{fname}"
-                body = "﻿"  # UTF-8 BOM
-                for (fn, phone, org, note) in rows:
-                    body += to_vcard(fn, phone, org=org, note=note)
+                body = "﻿"
+                for r in rows:
+                    fn = f"{r['이름']} ({r['ORG']})" if r["ORG"] else r["이름"]
+                    body += to_vcard(fn, r["_clean_phone"] or r["휴대폰"], org=r["ORG"], note=r["메모"])
                 zf.writestr(arcname, body.encode("utf-8"))
                 file_count += 1
                 contact_count += cnt
-
     zip_buf.seek(0)
 
     st.download_button(
@@ -300,7 +309,7 @@ if uploaded:
     )
 
     st.markdown(
-        f'<div class="success-box">✅ ZIP 안에 <b>지점별 폴더</b>가 있고, 각 폴더 안에 <b>매니저명_인원수.vcf</b> 파일이 들어있습니다.<br>'
+        f'<div class="success-box">✅ ZIP 안에 <b>지점 폴더 / 매니저명_인원수.vcf</b> 구조로 들어있습니다.<br>'
         f'· 지점: {len(groups)}개 &nbsp; · VCF 파일: {file_count}개 &nbsp; · 연락처: {contact_count}건</div>',
         unsafe_allow_html=True,
     )
@@ -310,15 +319,14 @@ st.markdown("---")
 st.markdown(
     """<div class="guide-box">
 💡 <b>사용 방법</b><br>
-<b>1.</b> 양식 다운로드 → 지점/매니저/대리점/지사/팀장님명/휴대폰/메모 입력 후 저장<br>
-<b>2.</b> 엑셀 파일 업로드 → 컬럼 자동 매핑 (필요 시 수동 변경)<br>
-<b>3.</b> 미리보기에서 지점/매니저별 인원수 확인<br>
-<b>4.</b> ZIP 다운로드 → 압축 풀면 <b>지점 폴더 / 매니저_인원수.vcf</b> 구조<br><br>
-📌 <b>구조 예시:</b><br>
-&nbsp;&nbsp;GA3-1지점/김태현_814.vcf<br>
-&nbsp;&nbsp;GA3-1지점/이현정_729.vcf<br>
-&nbsp;&nbsp;GA3-4지점/권순_394.vcf<br><br>
-📌 <b>vCard 형식:</b> FN(팀장명+지사), TEL, ORG(지사), NOTE(메모) 포함 — vCard 3.0
+<b>1.</b> 엑셀 파일 업로드 (양식 그대로 OK)<br>
+<b>2.</b> 헤더 행 / 데이터 시작 행 입력<br>
+<b>3.</b> 각 항목을 <b>실제 엑셀 열 문자(A, B, ..., AF)</b>로 선택<br>
+<b>4.</b> 미리보기 → ZIP 다운로드<br><br>
+📌 <b>예시 (사용인검색목록 양식):</b><br>
+&nbsp;&nbsp;지점=<b>G</b>, 매니저=<b>I</b>, 대리점=<b>K</b>, 지사=<b>M</b>, 이름=<b>P</b>, 휴대폰=<b>AF</b><br>
+&nbsp;&nbsp;헤더 행=2, 데이터 시작 행=3<br><br>
+📌 <b>vCard 형식:</b> FN(이름+지사), TEL, ORG(지사), NOTE(메모) — vCard 3.0
 </div>""",
     unsafe_allow_html=True,
 )
