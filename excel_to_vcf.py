@@ -212,10 +212,17 @@ if uploaded:
     st.markdown("---")
     st.markdown('<span class="step-badge">4</span> **추가 옵션**', unsafe_allow_html=True)
 
-    oc1, oc2 = st.columns(2)
+    oc1, oc2, oc3 = st.columns(3)
     with oc1:
         extra_note = st.text_input("메모에 추가로 붙일 텍스트 (선택)", value="")
     with oc2:
+        name_prefix = st.text_input(
+            "이름 앞에 붙일 문자/기호 (선택)",
+            value="",
+            placeholder="예: ㄱ, ★, [회사]",
+            help="예) 'ㄱ' 입력 → '홍길동' → 'ㄱ홍길동' 으로 저장됩니다.",
+        )
+    with oc3:
         skip_no_phone = st.checkbox("휴대폰이 없으면 제외", value=True)
 
     # 데이터 수집
@@ -239,6 +246,8 @@ if uploaded:
         clean_phone = normalize_phone(phone_raw)
         if skip_no_phone and not clean_phone:
             continue
+        if name_prefix:
+            name = f"{name_prefix}{name}"
         org = sub or agency
         final_note = note
         if extra_note:
