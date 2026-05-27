@@ -1,21 +1,18 @@
 """
 auto_loader.py — 데이터 자동 로더 + stage 감지 + 설정 머지
 
+[성능 최적화 (2026-05-27)]
+  - @st.cache_data 로 파일별 + 머지 결과 캐싱 → 매 rerun/새 세션마다 다시 안 읽음
+  - parquet 우선 로딩 (xlsx보다 30~50배 빠름) → *.parquet 있으면 그걸 사용
+  - calamine 엔진 폴백 (openpyxl보다 5~10배 빠름) → parquet 없을 때 사용
+
 [작동 순서]
   1. data/ 폴더에서 최신 파일 3개 자동 선택 (파일명 YYYYMMDD 기준)
-     - 파일명의 _, -, 공백 유무와 무관하게 매칭
-     - 예) MC_LIST_OUT_20260422.xlsx / MCLISTOUT20260422.xlsx / mc-list-out.xlsx 모두 OK
+     - 같은 YYYYMMDD에 .parquet, .xlsx 둘 다 있으면 .parquet 우선
   2. 3개 파일 outer merge
   3. 병합된 컬럼 + 기준년월로 current_month & stage 자동 감지
-  4. config/base.json + config/stages/{stage}.json 로드 (JSON 없으면 .pkl 폴백)
-  5. 문자열의 {m}, {m-1} 플레이스홀더를 현재 월 숫자로 치환
-  6. base + stage 머지 → 앱 session_state에 주입할 dict 반환
-
-[파일명 규칙 — 느슨하게 매칭]
-  data/MC_LIST_OUT_YYYYMMDD.xlsx          (권장)
-  data/PRIZE_6_BRIDGE_OUT_YYYYMMDD.xlsx   (권장)
-  data/PRIZE_SUM_OUT_YYYYMMDD.xlsx        (권장)
-  위와 같이 언더스코어가 있어도 되고, 없어도 됨.
+  4. config/base.json + config/stages/{stage}.json 로드
+  5. {m}, {m-1} 플레이스홀더 치환
 """
 import os
 import re
@@ -26,6 +23,19 @@ import pandas as pd
 from datetime import datetime, timedelta
 from collections import Counter
 
+# Streamlit 캐싱 — Streamlit이 없는 환경에서도 import 가능하도록 안전 폴백
+try:
+    import streamlit as st
+    _cache_data = st.cache_data
+except Exception:
+    def _cache_data(*args, **kwargs):
+        # decorator 인자 유무 모두 처리
+        if len(args) == 1 and callable(args[0]) and not kwargs:
+            return args[0]
+        def deco(fn):
+            return fn
+        return deco
+
 # ──────────────────────────────────────────────────────────────
 # 경로 설정
 # ──────────────────────────────────────────────────────────────
@@ -33,9 +43,6 @@ DATA_DIR = "data"
 CONFIG_DIR = "config"
 STAGES_DIR = os.path.join(CONFIG_DIR, "stages")
 
-# 파일 유형별 "정규화 후 포함되어야 할 토큰들"
-# 파일명에서 _, -, 공백을 모두 제거하고 대문자로 바꾼 뒤 비교하므로
-# MC_LIST_OUT_20260422.xlsx / MCLISTOUT20260422.xlsx / mc-list-out.xlsx 모두 매칭됨
 FILE_PATTERNS = [
     ("MC_LIST_OUT",        ["MCLISTOUT"]),
     ("PRIZE_6_BRIDGE_OUT", ["PRIZE6BRIDGEOUT"]),
@@ -44,10 +51,9 @@ FILE_PATTERNS = [
 
 
 # ──────────────────────────────────────────────────────────────
-# 데이터 파일 스캔
+# 파일 스캔 — parquet 우선
 # ──────────────────────────────────────────────────────────────
 def _normalize_filename(name):
-    """파일명(확장자 제외)에서 _, -, 공백 제거 + 대문자화 → 비교용 키."""
     stem = os.path.splitext(os.path.basename(name))[0]
     return re.sub(r"[\s_\-]+", "", stem).upper()
 
@@ -57,14 +63,32 @@ def _extract_yyyymmdd(filepath):
     return m.group(1) if m else "00000000"
 
 
+def _pick_best_format(candidates):
+    """같은 YYYYMMDD 그룹에서 parquet > xlsx 우선순위로 선택."""
+    if not candidates:
+        return None
+    # 최신 날짜 그룹만 추출
+    candidates_sorted = sorted(
+        candidates,
+        key=lambda p: (_extract_yyyymmdd(p), os.path.getmtime(p)),
+        reverse=True,
+    )
+    top_date = _extract_yyyymmdd(candidates_sorted[0])
+    top_group = [p for p in candidates_sorted if _extract_yyyymmdd(p) == top_date]
+    # parquet 우선
+    parquets = [p for p in top_group if p.lower().endswith(".parquet")]
+    if parquets:
+        return parquets[0]
+    return top_group[0]
+
+
 def find_latest_data_files():
-    """각 유형별 최신 파일 1개씩 반환. 언더스코어 유무와 무관하게 매칭."""
-    # data/ 폴더의 모든 엑셀 파일 (xlsx, xls 모두)
+    """각 유형별 최신 파일 1개씩 반환 (parquet 우선, xlsx/xls 폴백)."""
     all_files = (
+        glob.glob(os.path.join(DATA_DIR, "*.parquet")) +
         glob.glob(os.path.join(DATA_DIR, "*.xlsx")) +
         glob.glob(os.path.join(DATA_DIR, "*.xls"))
     )
-    # Excel 임시파일(~$로 시작) 제외
     all_files = [f for f in all_files if not os.path.basename(f).startswith("~$")]
 
     result = {}
@@ -73,20 +97,12 @@ def find_latest_data_files():
             f for f in all_files
             if all(tok in _normalize_filename(f) for tok in tokens)
         ]
-        if not candidates:
-            result[key] = None
-            continue
-        # YYYYMMDD 있으면 그걸로, 없으면 수정시간으로 최신 우선
-        candidates.sort(
-            key=lambda p: (_extract_yyyymmdd(p), os.path.getmtime(p)),
-            reverse=True,
-        )
-        result[key] = candidates[0]
+        result[key] = _pick_best_format(candidates)
     return result
 
 
 # ──────────────────────────────────────────────────────────────
-# 엑셀 로드 + 인코딩 정리 (기존 app.py 로직 재사용)
+# 엑셀/parquet 로드 + 인코딩 정리
 # ──────────────────────────────────────────────────────────────
 def _decode_excel_text(val):
     if pd.isna(val):
@@ -113,8 +129,22 @@ def _clean_key(val):
     return s
 
 
-def _load_excel_clean(path):
-    df = pd.read_excel(path)
+def _read_excel_fast(path):
+    """xlsx를 가능한 한 빠르게 읽기 — calamine 우선, openpyxl 폴백."""
+    try:
+        return pd.read_excel(path, engine="calamine")
+    except Exception:
+        return pd.read_excel(path, engine="openpyxl")
+
+
+# 파일 경로 + mtime 키로 캐싱 — 새 날짜 파일 push되면 자동 무효화
+@_cache_data(show_spinner=False)
+def _load_file_clean(path, _mtime):  # _mtime은 캐시 키 변동용
+    """parquet/xlsx 자동 판별 + 인코딩 정리 + 캐싱."""
+    if path.lower().endswith(".parquet"):
+        df = pd.read_parquet(path)
+    else:
+        df = _read_excel_fast(path)
     df.columns = [_decode_excel_text(c) if isinstance(c, str) else c for c in df.columns]
     for c in df.columns:
         if pd.api.types.is_string_dtype(df[c]):
@@ -122,12 +152,18 @@ def _load_excel_clean(path):
     return df
 
 
-# ──────────────────────────────────────────────────────────────
-# 3개 파일 outer merge (기존 app.py 병합 로직 그대로)
-# ──────────────────────────────────────────────────────────────
+def _load_excel_clean(path):
+    """외부에서 호출하는 안정 API. 내부는 캐시된 _load_file_clean 사용."""
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        mtime = 0
+    return _load_file_clean(path, mtime)
 
-# merge key가 파일에 없을 때 자동으로 찾아볼 후보들.
-# 지정 키 → 후보 순서대로 시도 → 모두 실패하면 에러.
+
+# ──────────────────────────────────────────────────────────────
+# merge key 자동 해석
+# ──────────────────────────────────────────────────────────────
 _MERGE_KEY_FALLBACKS = {
     "대리점설계사조직코드":   ["대리점설계사조직코드", "현재대리점설계사조직코드"],
     "현재대리점설계사조직코드": ["현재대리점설계사조직코드", "대리점설계사조직코드"],
@@ -135,13 +171,11 @@ _MERGE_KEY_FALLBACKS = {
 
 
 def _resolve_merge_key(df, requested_key, file_label):
-    """df에서 requested_key를 찾고, 없으면 fallback 후보를 순회."""
     if requested_key in df.columns:
         return requested_key
     for cand in _MERGE_KEY_FALLBACKS.get(requested_key, []):
         if cand in df.columns:
             return cand
-    # 마지막 시도: "대리점설계사조직코드" 또는 "현재대리점설계사조직코드"가 들어간 컬럼 아무거나
     for c in df.columns:
         if "대리점설계사조직코드" in c:
             return c
@@ -151,15 +185,23 @@ def _resolve_merge_key(df, requested_key, file_label):
     )
 
 
-def merge_three_files(f1, f2, f3, key1, key2, key3):
-    df1 = _load_excel_clean(f1)
-    df2 = _load_excel_clean(f2)
-    df3 = _load_excel_clean(f3)
+# ──────────────────────────────────────────────────────────────
+# 3개 파일 outer merge — 캐시 가능
+# ──────────────────────────────────────────────────────────────
+@_cache_data(show_spinner="데이터 머지 중...", ttl=3600)
+def _merge_three_cached(f1, f2, f3, m1, m2, m3, key1, key2, key3):
+    """경로+mtime 기반 캐싱. 같은 파일 조합이면 머지 결과 즉시 반환."""
+    df1 = _load_file_clean(f1, m1)
+    df2 = _load_file_clean(f2, m2)
+    df3 = _load_file_clean(f3, m3)
 
-    # 각 파일에서 실제 사용할 키를 결정 (fallback 포함)
     k1 = _resolve_merge_key(df1, key1, "MC_LIST_OUT")
     k2 = _resolve_merge_key(df2, key2, "PRIZE_6_BRIDGE_OUT")
     k3 = _resolve_merge_key(df3, key3, "PRIZE_SUM_OUT")
+
+    df1 = df1.copy()
+    df2 = df2.copy()
+    df3 = df3.copy()
 
     df1["merge_key1"] = df1[k1].apply(_clean_key)
     df2["merge_key2"] = df2[k2].apply(_clean_key)
@@ -169,7 +211,6 @@ def merge_three_files(f1, f2, f3, key1, key2, key3):
         how="outer", suffixes=("_파일1", "_파일2"),
     )
 
-    # 중복 컬럼 combine_first
     for c1 in [c for c in df_merged.columns if c.endswith("_파일1")]:
         base = c1.replace("_파일1", "")
         c2 = base + "_파일2"
@@ -199,8 +240,16 @@ def merge_three_files(f1, f2, f3, key1, key2, key3):
     return df_merged
 
 
+def merge_three_files(f1, f2, f3, key1, key2, key3):
+    """캐시 wrapper."""
+    def _mt(p):
+        try: return os.path.getmtime(p)
+        except OSError: return 0
+    return _merge_three_cached(f1, f2, f3, _mt(f1), _mt(f2), _mt(f3), key1, key2, key3)
+
+
 # ──────────────────────────────────────────────────────────────
-# 현재 월 감지 (기준년월 최빈값)
+# 현재 월 / stage 감지
 # ──────────────────────────────────────────────────────────────
 def detect_current_month(df):
     if "기준년월" in df.columns:
@@ -210,7 +259,7 @@ def detect_current_month(df):
             v_clean = v.replace(".", "").replace("-", "").strip()
             if v_clean.endswith(".0"):
                 v_clean = v_clean[:-2]
-            if len(v_clean) >= 6:  # YYYYMM...
+            if len(v_clean) >= 6:
                 try:
                     months.append(int(v_clean[4:6]))
                 except Exception:
@@ -225,17 +274,13 @@ def detect_current_month(df):
     return datetime.now().month
 
 
-# ──────────────────────────────────────────────────────────────
-# stage 자동 감지 — "어느 주차까지 실적이 찍혔는지" 기준 (1~6주차 일반화)
-# ──────────────────────────────────────────────────────────────
-MAX_WEEK_SUPPORTED = 6  # 필요 시 7, 8도 확장 가능. config/stages/stage_N_weekN.json 있어야 함.
+MAX_WEEK_SUPPORTED = 6
 
 
 def detect_stage(df):
     cols = set(df.columns)
     has_monthly_연속 = any(re.match(r"^연속가동실적_\d+월$", c) for c in cols)
 
-    # 컬럼이 있어도 값이 전부 0이면 "아직 집계 전" — 상위 stage로 안 올라감
     def _has_value(col):
         if col not in df.columns:
             return False
@@ -248,7 +293,6 @@ def detect_stage(df):
         except Exception:
             return False
 
-    # 값이 실제로 찍힌 가장 높은 주차 찾기 (2주차 이상부터 체크 — 1주차는 base)
     max_week_with_value = 0
     for n in range(2, MAX_WEEK_SUPPORTED + 1):
         col = f"실적_{n}주차"
@@ -258,15 +302,11 @@ def detect_stage(df):
     if max_week_with_value >= 2:
         return f"stage_{max_week_with_value}_week{max_week_with_value}"
 
-    # 아직 2주차 값이 없으면 1주차 단계
     if "실적_1주차" in cols or has_monthly_연속:
         return "stage_1_week1_early"
     return "stage_1_week1_early"
 
 
-# ──────────────────────────────────────────────────────────────
-# 플레이스홀더 치환 ({m} → current_month, {m-1} → prev_month)
-# ──────────────────────────────────────────────────────────────
 def substitute_placeholders(obj, current_month):
     prev_m = current_month - 1 if current_month > 1 else 12
     if isinstance(obj, dict):
@@ -274,14 +314,10 @@ def substitute_placeholders(obj, current_month):
     if isinstance(obj, list):
         return [substitute_placeholders(v, current_month) for v in obj]
     if isinstance(obj, str):
-        # {m-1} 먼저 (m을 포함하므로)
         return obj.replace("{m-1}", str(prev_m)).replace("{m}", str(current_month))
     return obj
 
 
-# ──────────────────────────────────────────────────────────────
-# JSON 우선, PKL 폴백 로더
-# ──────────────────────────────────────────────────────────────
 def _load_json_or_pkl(json_path, pkl_path):
     if os.path.exists(json_path):
         with open(json_path, "r", encoding="utf-8") as f:
@@ -314,9 +350,6 @@ def list_available_stages():
     return sorted(stages)
 
 
-# ──────────────────────────────────────────────────────────────
-# base + stage 머지 → 앱이 쓰는 config dict
-# ──────────────────────────────────────────────────────────────
 def merge_base_and_stage(base, stage):
     if not base:
         return {}
@@ -354,11 +387,6 @@ def merge_base_and_stage(base, stage):
 # 메인 진입점
 # ──────────────────────────────────────────────────────────────
 def auto_load(force_stage=None):
-    """
-    Returns:
-        성공: {'df_merged', 'config', 'detected_stage', 'current_month', 'files'}
-        실패: {'error': 메시지}
-    """
     files = find_latest_data_files()
     missing = [k for k, v in files.items() if not v]
     if missing:
@@ -385,7 +413,6 @@ def auto_load(force_stage=None):
 
     stage = load_stage_config(stage_id)
 
-    # 폴백: 감지된 stage 파일이 없으면 가장 가까운 하위 stage로 내려감
     if not stage:
         available = set(list_available_stages())
         m = re.match(r"stage_(\d+)_week\d+", stage_id)
@@ -408,8 +435,6 @@ def auto_load(force_stage=None):
     stage_r = substitute_placeholders(stage, current_month)
     config = merge_base_and_stage(base_r, stage_r)
 
-    # data_date: 파일명 YYYYMMDD는 수집일이고, 실제 데이터는 전일 기준.
-    # 파일명 20260422 → data_date = 2026.04.21 (월·연 경계 자동 처리)
     m = re.search(r"(\d{8})", os.path.basename(files["MC_LIST_OUT"]))
     if m:
         try:
