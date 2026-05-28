@@ -327,14 +327,50 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
             col_to_grp[c] = grp['name']
 
     data_date = ''
-    clip_footer = ''
+    clip_footer_base = ''
     try:
         data_date = st.session_state.get('data_date', '')
-        clip_footer = st.session_state.get('clip_footer', '')
+        clip_footer_base = st.session_state.get('clip_footer', '')
     except Exception:
         pass
-    if not clip_footer.strip():
-        clip_footer = "팀장님! 시상 부족금액 안내드려요!\n부족한 거 챙겨서 꼭 시상 많이 받아 가셨으면 좋겠습니다!\n좋은 하루 되세요!"
+
+    def _build_personal_footer(p_results, p_total, shortfall_items):
+        """시상 결과와 부족금액을 기반으로 개인 맞춤 독려 문구 생성."""
+        import re as _re
+        lines = []
+
+        # ── 1. 시상 합산 요약 ──
+        if p_total > 0:
+            lines.append(f"🎯 이번 달 시책 합산 {p_total:,.0f}원!")
+
+        # ── 2. 부족금액 기반 독려 (10만 이하만) ──
+        nudge_items = []
+        for sf_text in shortfall_items:
+            m = _re.search(r'부족금액[:\s]*([0-9,]+)', sf_text)
+            col_m = _re.search(r'🔴\s*(.+?)\s*부족금액', sf_text)
+            if m:
+                raw = m.group(1).replace(',', '')
+                try:
+                    amt = float(raw)
+                    col_name = col_m.group(1).strip() if col_m else ''
+                    if 0 < amt <= 100000:
+                        nudge_items.append((amt, col_name))
+                except Exception:
+                    pass
+
+        if nudge_items:
+            nudge_items.sort(key=lambda x: x[0])
+            for amt, col_name in nudge_items[:2]:
+                lines.append(f"💪 {col_name} {amt:,.0f}원만 더 하면 다음 구간!")
+        elif p_total == 0:
+            lines.append("💡 이번 주 가동 실적 챙기시면 시상 기회가 있어요!")
+
+        # ── 3. 마무리 ──
+        if p_total > 0:
+            lines.append("📌 마감까지 시상 꼭 챙겨가세요!")
+        lines.append("설계 요청 주시면 최우선 처리해 드리겠습니다!")
+
+        return '\n'.join(lines)
 
     clip_texts = []
     for row_idx, (_, row) in enumerate(df.iterrows()):
@@ -380,10 +416,17 @@ def render_html_table(df, col_groups=None, prize_data_map=None):
             prize_text = format_prize_clip_text(p_results, p_total)
             if prize_text:
                 lines.append(prize_text)
-
-        if clip_footer:
+            # 개인 맞춤 독려 문구
             lines.append("")
-            lines.append(clip_footer)
+            lines.append(_build_personal_footer(p_results, p_total, goal_lines))
+        else:
+            # 시상 데이터 없는 경우
+            if clip_footer_base.strip():
+                lines.append("")
+                lines.append(clip_footer_base)
+            else:
+                lines.append("")
+                lines.append(_build_personal_footer([], 0, goal_lines))
 
         clip_texts.append('\n'.join(lines))
 
