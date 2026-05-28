@@ -1,513 +1,327 @@
 """
-prize_utils.py — 시상금 조회 유틸리티 (v2: 엑셀 값 직접 조회)
-
-[핵심 원칙]
-  시책율·시상금은 회사가 엑셀에 이미 계산해서 내려보내기 때문에, 앱은 절대
-  자체 계산(tier 기반 추정, 곱셈 등)을 하지 않고 엑셀에 찍힌 값을 그대로
-  가져온다. 이렇게 하면 매주 시책율/구간 금액이 바뀌어도 config 수정이
-  필요 없고, 숫자가 꼬일 일도 없다.
-
-[감지되는 엑셀 컬럼 패턴]
-  주차별 시상:    실적_{N}주차, 추가13회예정금_{N}주대상, 추가13회예정금_{N}주
-                  서브: 추가13회예정금_{N}주대상_{상품|상품추가|유퍼}
-                  연속주차: 추가13회예정금_{A}_{B}주대상 → {B}주차에 편입
-  월누계:         추가13회예정금_월대상 + 추가13회예정금계
-  월 브릿지:      브릿지실적_{A}월, 브릿지실적_{B}월, 브릿지시상금,
-                  브릿지부족금액_{B}월, 브릿지실적목표_{B}월
-  월 연속가동:    연속가동실적_{A}월 / _{B}월, 연속가동시상금, 부족금액/목표
-  주차연속가동:   주차연속가동대상, _3주실적/_4주실적, _3주구간/_4주구간,
-                  _실적목표, _실적부족액, 추가13회예정금_주차연속가동
+prize_utils.py — 시상금 계산 유틸리티 모듈
+============================================
+manage.py, render.py 에서 import 하여 사용.
+Streamlit 앱 코드(st.set_page_config 등)는 포함하지 않음.
 """
-import re
 import pandas as pd
+import re
 
 
-# ──────────────────────────────────────────────────────────────
-# 기본 유틸
-# ──────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════
+# 키 정제
+# ═══════════════════════════════════════════════════════
 def clean_key(val):
-    if pd.isna(val) or str(val).strip().lower() == "nan":
+    """설계사코드 등을 비교용 문자열로 정제."""
+    if pd.isna(val) or str(val).strip().lower() == 'nan':
         return ""
-    s = str(val).strip().replace(" ", "").upper()
-    if s.endswith(".0"):
-        s = s[:-2]
-    return s
+    val_str = str(val).strip().replace(" ", "").upper()
+    val_str = re.sub(r'_[xX]([0-9A-Fa-f]{4})_',
+                     lambda m: chr(int(m.group(1), 16)), val_str)
+    if val_str.endswith('.0'):
+        val_str = val_str[:-2]
+    return val_str
 
 
-def _safe_float(val):
+# ═══════════════════════════════════════════════════════
+# 내부 헬퍼
+# ═══════════════════════════════════════════════════════
+def _safe_float_prize(val):
     if pd.isna(val) or val is None:
         return 0.0
-    s = str(val).replace(",", "").strip()
+    s = str(val).replace(',', '').strip()
     try:
         return float(s)
     except Exception:
         return 0.0
 
 
-# 시상금 항목 라벨 (회사 명명규칙 반영)
-_DEFAULT_LABELS = {
-    "base": "인보험 기본",
-    "상품": "상품 추가",
-    "상품추가": "상품 추가2",
-    "유퍼간편": "유퍼스트",
-}
-# 대상/시상 suffix 매핑 — 대상 컬럼은 '_유퍼' 지만 시상 컬럼은 '_유퍼간편'
-_SUFFIX_MAP = {"상품": "상품", "상품추가": "상품추가", "유퍼": "유퍼간편"}
+def _first_valid(df, col):
+    """지정 열에서 NaN이 아닌 첫 번째 값을 반환. 없으면 0."""
+    if not col or col not in df.columns:
+        return 0
+    s = df[col].dropna()
+    return s.values[0] if not s.empty else 0
 
 
-# ──────────────────────────────────────────────────────────────
-# 컬럼 패턴 자동 감지
-# ──────────────────────────────────────────────────────────────
-def detect_prize_structure(columns, labels=None):
-    """엑셀 컬럼 집합을 받아 시상 구조를 dict로 반환."""
-    cols = set(columns)
-    labels = labels or _DEFAULT_LABELS
+def _read_prize_items_app(cfg, match_df):
+    """설정에서 시상금 항목들을 읽어 [{label, amount}] 리스트 반환."""
+    prize_details = []
+    items = cfg.get('prize_items', [])
+    if items:
+        for item in items:
+            col_prize = item.get('col_prize', '') or item.get('col', '')
+            label = item.get('label', '')
+            if not col_prize or col_prize not in match_df.columns:
+                continue
 
-    wp = re.compile(r"^추가13회예정금_(\d+)주대상$")
-    sp = re.compile(r"^추가13회예정금_(\d+)주대상_(.+)$")
-    mp = re.compile(r"^추가13회예정금_(\d+)_(\d+)주대상$")
+            col_elig = item.get('col_eligible', '')
+            if col_elig and col_elig in match_df.columns:
+                elig_series = match_df[col_elig].dropna()
+                elig_val = _safe_float_prize(elig_series.values[0]) if not elig_series.empty else 0
+                if elig_val == 0:
+                    continue
 
-    detected = {}   # {주차번호: [{label, elig_col, prize_col}, ...]}
-
-    for c in sorted(cols):
-        m = wp.match(c)
-        if m:
-            w = int(m.group(1))
-            pc = f"추가13회예정금_{w}주"
-            if pc in cols:
-                detected.setdefault(w, []).append({
-                    "label": labels.get("base", "인보험 기본"),
-                    "elig":  c,
-                    "prize": pc,
-                })
-        m2 = sp.match(c)
-        if m2:
-            w, sfx = int(m2.group(1)), m2.group(2)
-            mapped = _SUFFIX_MAP.get(sfx, sfx)
-            pc = f"추가13회예정금_{w}주_{mapped}"
-            if pc in cols:
-                detected.setdefault(w, []).append({
-                    "label": labels.get(mapped, labels.get(sfx, sfx)),
-                    "elig":  c,
-                    "prize": pc,
-                })
-        m3 = mp.match(c)
-        if m3:
-            a, b = int(m3.group(1)), int(m3.group(2))
-            pc = f"추가13회예정금_{a}_{b}주"
-            if pc in cols:
-                detected.setdefault(b, []).append({
-                    "label": f"{labels.get('base', '인보험 기본')} ({a}주 연속)",
-                    "elig":  c,
-                    "prize": pc,
-                })
-
-    weeks = {}
-    for w in sorted(detected.keys()):
-        pf = f"실적_{w}주차"
-        weeks[w] = {
-            "perf":  pf if pf in cols else None,
-            "items": detected[w],
-        }
-
-    # 월 누계
-    cumul = None
-    if "추가13회예정금_월대상" in cols and "추가13회예정금계" in cols:
-        cumul = {
-            "elig":  "추가13회예정금_월대상",
-            "prize": "추가13회예정금계",
-        }
-
-    # 월 브릿지
-    bridge = None
-    if "브릿지시상금" in cols:
-        bm = sorted({int(m.group(1))
-                     for c in cols
-                     for m in [re.match(r"^브릿지실적_(\d+)월$", c)] if m})
-        pm = bm[0] if len(bm) >= 1 else None
-        cm = bm[1] if len(bm) >= 2 else None
-        bridge = {
-            "prev":      f"브릿지실적_{pm}월" if pm else None,
-            "curr":      f"브릿지실적_{cm}월" if cm else None,
-            "prize":     "브릿지시상금",
-            "shortfall": f"브릿지부족금액_{cm}월" if cm and f"브릿지부족금액_{cm}월" in cols else None,
-            "target":    f"브릿지실적목표_{cm}월" if cm and f"브릿지실적목표_{cm}월" in cols else None,
-            "lp":        f"{pm}월" if pm else "",
-            "lc":        f"{cm}월" if cm else "",
-        }
-
-    # 월 연속가동
-    consec = None
-    if "연속가동시상금" in cols:
-        cm2 = sorted({int(m.group(1))
-                      for c in cols
-                      for m in [re.match(r"^연속가동실적_(\d+)월$", c)] if m})
-        pm2 = cm2[0] if len(cm2) >= 1 else None
-        cmb = cm2[1] if len(cm2) >= 2 else None
-        consec = {
-            "prev":      f"연속가동실적_{pm2}월" if pm2 else None,
-            "curr":      f"연속가동실적_{cmb}월" if cmb else None,
-            "prize":     "연속가동시상금",
-            "shortfall": f"연속가동부족금액_{cmb}월" if cmb and f"연속가동부족금액_{cmb}월" in cols else None,
-            "target":    f"연속가동실적목표_{cmb}월" if cmb and f"연속가동실적목표_{cmb}월" in cols else None,
-            "lp":        f"{pm2}월" if pm2 else "",
-            "lc":        f"{cmb}월" if cmb else "",
-        }
-
-    # 주차연속가동 (3~4주 동일 가동)
-    weekly_consec = None
-    if "주차연속가동대상" in cols:
-        weekly_consec = {
-            "target_col": "주차연속가동대상",
-            "perf_3w":    "주차연속가동_3주실적" if "주차연속가동_3주실적" in cols else None,
-            "perf_4w":    "주차연속가동_4주실적" if "주차연속가동_4주실적" in cols else None,
-            "tier_3w":    "주차연속가동_3주구간" if "주차연속가동_3주구간" in cols else None,
-            "tier_4w":    "주차연속가동_4주구간" if "주차연속가동_4주구간" in cols else None,
-            "target":     "주차연속가동_실적목표" if "주차연속가동_실적목표" in cols else None,
-            "shortfall":  "주차연속가동_실적부족액" if "주차연속가동_실적부족액" in cols else None,
-            "prize":      "추가13회예정금_주차연속가동" if "추가13회예정금_주차연속가동" in cols else None,
-        }
-
-    return {
-        "weeks":         weeks,
-        "cumul":         cumul,
-        "bridge":        bridge,
-        "consec":        consec,
-        "weekly_consec": weekly_consec,
-    }
+            prize_series = match_df[col_prize].dropna()
+            raw = prize_series.values[0] if not prize_series.empty else 0
+            amt = _safe_float_prize(raw)
+            prize_details.append({"label": label or col_prize, "amount": amt})
+    else:
+        col_prize = cfg.get('col_prize', '')
+        if col_prize and col_prize in match_df.columns:
+            prize_series = match_df[col_prize].dropna()
+            raw = prize_series.values[0] if not prize_series.empty else 0
+            amt = _safe_float_prize(raw)
+            if amt != 0:
+                prize_details.append({"label": "시상금", "amount": amt})
+    return prize_details
 
 
-# ──────────────────────────────────────────────────────────────
-# 설계사 1명의 시상금 조회 (계산 X, 엑셀 값 그대로)
-# ──────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════
+# 시상금 계산 (config 기반)
+# ═══════════════════════════════════════════════════════
 def calculate_prize_for_code(target_code, prize_config, df_src):
+    """특정 사번의 시상금을 df_merged 에서 직접 읽기.
+    Returns (results_list, total_prize).
     """
-    엑셀에서 시상금 값을 직접 조회.
-
-    prize_config 파라미터는 호환성을 위해 유지하나 실제로는 사용하지 않음.
-    구조는 df_src 컬럼에서 자동 감지된다.
-
-    Returns:
-        (results, total) — results 의 각 항목 type:
-            '구간'         — 주차별 시상
-            '월브릿지'     — 월 브릿지 / 월 연속가동 (공통 렌더링)
-            '주차연속'     — 주차연속가동 (3~4주 동일 가동)
-            '누계'         — 월 누계
-    """
-    if df_src is None or df_src.empty:
+    if not prize_config or df_src is None or df_src.empty:
         return [], 0
-
-    code_col = "대리점설계사조직코드"
-    if code_col not in df_src.columns:
-        return [], 0
-
-    ps = detect_prize_structure(df_src.columns)
-
-    # 설계사 매칭 (clean key 기반)
-    safe_code = clean_key(str(target_code))
-    _ck = "_pclean_대리점설계사조직코드"
-    if _ck not in df_src.columns:
-        df_src[_ck] = df_src[code_col].apply(clean_key)
-    match = df_src[df_src[_ck] == safe_code]
-    if match.empty:
-        return [], 0
-    row = match.iloc[0]
 
     results = []
+    safe_code = clean_key(str(target_code))
 
-    # ── 주차별 시상 ──────────────────────────────────────────
-    for w in sorted(ps["weeks"].keys()):
-        info = ps["weeks"][w]
-        perf = _safe_float(row.get(info["perf"], 0)) if info["perf"] else 0
-        details = []
-        has_eligible = False
-        for it in info["items"]:
-            elig = _safe_float(row.get(it["elig"], 0))
-            if elig == 0:
+    for cfg in prize_config:
+        col_code = cfg.get('col_code', '')
+        if not col_code or col_code not in df_src.columns:
+            continue
+
+        _cc = f"_pclean_{col_code}"
+        if _cc not in df_src.columns:
+            df_src[_cc] = df_src[col_code].apply(clean_key)
+        match_df = df_src[df_src[_cc] == safe_code]
+
+        if match_df.empty:
+            for alt_col in ['본인고객번호', '본인고객ID', '_unified_search_key']:
+                if alt_col in df_src.columns:
+                    _ac = f"_pclean_{alt_col}"
+                    if _ac not in df_src.columns:
+                        df_src[_ac] = df_src[alt_col].apply(clean_key)
+                    match_df = df_src[df_src[_ac] == safe_code]
+                    if not match_df.empty:
+                        break
+        if match_df.empty:
+            continue
+
+        cat = cfg.get('category', 'weekly')
+        p_type = cfg.get('type', '구간 시책')
+
+        prize_details = _read_prize_items_app(cfg, match_df)
+        prize = sum(d['amount'] for d in prize_details)
+
+        if cat == 'weekly':
+            if "1기간" in p_type:
+                if not prize_details:
+                    continue
+                val_prev = _safe_float_prize(_first_valid(match_df, cfg.get('col_val_prev', '')))
+                val_curr = _safe_float_prize(_first_valid(match_df, cfg.get('col_val_curr', '')))
+                results.append({
+                    "name": cfg['name'], "category": "weekly", "type": "브릿지1",
+                    "val_prev": val_prev, "val_curr": val_curr,
+                    "prize": prize, "prize_details": prize_details
+                })
+
+            elif "2기간" in p_type:
+                val_prev = _safe_float_prize(_first_valid(match_df, cfg.get('col_val_prev', '')))
+                val_curr = _safe_float_prize(_first_valid(match_df, cfg.get('col_val_curr', '')))
+                curr_req = float(cfg.get('curr_req', 100000.0))
+                calc_rate, tier_achieved, prize = 0, 0, 0
+                for amt, rate in cfg.get('tiers', []):
+                    if val_prev >= amt:
+                        tier_achieved = amt
+                        calc_rate = rate
+                        break
+                if tier_achieved > 0:
+                    prize = (tier_achieved + curr_req) * (calc_rate / 100)
+                next_tier = None
+                for amt, rate in reversed(cfg.get('tiers', [])):
+                    if val_prev < amt:
+                        next_tier = amt
+                        break
+                shortfall = next_tier - val_prev if next_tier else 0
+                curr_met = val_curr >= curr_req
+                results.append({
+                    "name": cfg['name'], "category": "weekly", "type": "브릿지2",
+                    "val": val_prev, "val_curr": val_curr,
+                    "tier": tier_achieved, "rate": calc_rate, "prize": prize,
+                    "curr_req": curr_req, "next_tier": next_tier,
+                    "shortfall": shortfall, "curr_met": curr_met
+                })
+
+            elif "주차브릿지" in p_type:
+                w3 = _safe_float_prize(_first_valid(match_df, cfg.get('col_val_w3', '')))
+                w3_label = cfg.get('w3_label', '3주')
+                w4_label = cfg.get('w4_label', '4주')
+                wb_tiers = cfg.get('weekly_bridge_tiers', [])
+                tier_achieved = 0
+                projected_prize = 0
+                for threshold, prize_amt in wb_tiers:
+                    if w3 >= threshold:
+                        tier_achieved = threshold
+                        projected_prize = prize_amt
+                        break
+                next_tier = None
+                next_tier_prize = 0
+                for threshold, prize_amt in reversed(wb_tiers):
+                    if w3 < threshold:
+                        next_tier = threshold
+                        next_tier_prize = prize_amt
+                        break
+                shortfall = max(0, (next_tier or 0) - w3) if next_tier else 0
+                if w3 == 0:
+                    continue
+                results.append({
+                    "name": cfg['name'], "category": "weekly", "type": "주차브릿지",
+                    "val_w3": w3, "tier": tier_achieved, "prize": projected_prize,
+                    "next_tier": next_tier,
+                    "next_tier_prize": next_tier_prize if next_tier else 0,
+                    "shortfall": shortfall,
+                    "w3_label": w3_label, "w4_label": w4_label
+                })
+
+            else:
+                if not prize_details:
+                    continue
+                val = _safe_float_prize(_first_valid(match_df, cfg.get('col_val', '')))
+                results.append({
+                    "name": cfg['name'], "category": "weekly", "type": "구간",
+                    "val": val, "prize": prize, "prize_details": prize_details
+                })
+
+        elif cat == 'cumulative':
+            if not prize_details:
                 continue
-            has_eligible = True
-            amt = _safe_float(row.get(it["prize"], 0))
-            if amt > 0:
-                details.append({"label": it["label"], "amount": amt})
-        prize = sum(d["amount"] for d in details)
-        if details or perf > 0 or has_eligible:
+            val = _safe_float_prize(_first_valid(match_df, cfg.get('col_val', '')))
             results.append({
-                "name":          f"{w}주차 시상",
-                "category":      "weekly",
-                "type":          "구간",
-                "val":           perf,
-                "prize":         prize,
-                "prize_details": details,
+                "name": cfg['name'], "category": "cumulative", "type": "누계",
+                "val": val, "prize": prize, "prize_details": prize_details
             })
 
-    # ── 월 연속가동 (브릿지보다 먼저) ────────────────────────
-    if ps.get("consec"):
-        c = ps["consec"]
-        cp = _safe_float(row.get(c["prize"], 0))
-        vp = _safe_float(row.get(c["prev"], 0)) if c["prev"] else 0
-        vc = _safe_float(row.get(c["curr"], 0)) if c["curr"] else 0
-        sf = _safe_float(row.get(c["shortfall"], 0)) if c.get("shortfall") else 0
-        tgt = _safe_float(row.get(c["target"], 0)) if c.get("target") else 0
-        if vp > 0 or vc > 0 or cp > 0:
-            results.append({
-                "name":          f"연속가동 시상 ({c['lp']}~{c['lc']})",
-                "category":      "weekly",
-                "type":          "월브릿지",
-                "val_prev":      vp,
-                "val_curr":      vc,
-                "prize":         cp,
-                "shortfall":     sf,
-                "target":        tgt,
-                "label_prev":    c["lp"],
-                "label_curr":    c["lc"],
-                "prize_details": [{"label": "연속가동 시상금", "amount": cp}] if cp > 0 else [],
-            })
-
-    # ── 월 브릿지 ────────────────────────────────────────────
-    if ps.get("bridge"):
-        b = ps["bridge"]
-        bp = _safe_float(row.get(b["prize"], 0))
-        vp = _safe_float(row.get(b["prev"], 0)) if b["prev"] else 0
-        vc = _safe_float(row.get(b["curr"], 0)) if b["curr"] else 0
-        sf = _safe_float(row.get(b["shortfall"], 0)) if b.get("shortfall") else 0
-        tgt = _safe_float(row.get(b["target"], 0)) if b.get("target") else 0
-        if vp > 0 or vc > 0 or bp > 0:
-            results.append({
-                "name":          f"브릿지 시상 ({b['lp']}~{b['lc']})",
-                "category":      "weekly",
-                "type":          "월브릿지",
-                "val_prev":      vp,
-                "val_curr":      vc,
-                "prize":         bp,
-                "shortfall":     sf,
-                "target":        tgt,
-                "label_prev":    b["lp"],
-                "label_curr":    b["lc"],
-                "prize_details": [{"label": "브릿지 시상금", "amount": bp}] if bp > 0 else [],
-            })
-
-    # ── 주차연속가동 (3~4주) ─────────────────────────────────
-    if ps.get("weekly_consec"):
-        wc = ps["weekly_consec"]
-        tgt_val = _safe_float(row.get(wc["target_col"], 0))
-        if tgt_val != 0:  # 대상자만
-            perf_3w = _safe_float(row.get(wc["perf_3w"], 0)) if wc.get("perf_3w") else 0
-            perf_4w = _safe_float(row.get(wc["perf_4w"], 0)) if wc.get("perf_4w") else 0
-            tier_3w = _safe_float(row.get(wc["tier_3w"], 0)) if wc.get("tier_3w") else 0
-            tier_4w = _safe_float(row.get(wc["tier_4w"], 0)) if wc.get("tier_4w") else 0
-            sf = _safe_float(row.get(wc["shortfall"], 0)) if wc.get("shortfall") else 0
-            prize_amt = _safe_float(row.get(wc["prize"], 0)) if wc.get("prize") else 0
-            has_prize = wc.get("prize") is not None
-            if perf_3w > 0 or perf_4w > 0 or prize_amt > 0:
-                results.append({
-                    "name":      "주차연속가동 (3~4주)",
-                    "category":  "weekly",
-                    "type":      "주차연속",
-                    "perf_3w":   perf_3w,
-                    "perf_4w":   perf_4w,
-                    "tier_3w":   tier_3w,
-                    "tier_4w":   tier_4w,
-                    "shortfall": sf,
-                    "prize":     prize_amt,
-                    "has_prize": has_prize,
-                })
-
-    # ── 월 누계 ──────────────────────────────────────────────
-    if ps.get("cumul"):
-        cm = ps["cumul"]
-        elig = _safe_float(row.get(cm["elig"], 0))
-        if elig != 0:
-            amt = _safe_float(row.get(cm["prize"], 0))
-            if amt > 0:
-                results.append({
-                    "name":          "월 누계 시상",
-                    "category":      "cumulative",
-                    "type":          "누계",
-                    "val":           0,
-                    "prize":         amt,
-                    "prize_details": [{"label": "월 누계", "amount": amt}],
-                })
-
-    total = sum(r["prize"] for r in results)
+    total = sum(r['prize'] for r in results)
     return results, total
 
 
-# ──────────────────────────────────────────────────────────────
-# 카톡 복사 텍스트 생성
-# ──────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════
+# 카톡 복사용 텍스트
+# ═══════════════════════════════════════════════════════
 def format_prize_clip_text(results, total):
+    """시상 결과를 카카오톡 공유용 텍스트로 변환."""
     if not results:
         return ""
+    gugan_res = [r for r in results if r['category'] == 'weekly' and r['type'] == '구간']
+    bridge_res = [r for r in results if r['category'] == 'weekly' and '브릿지' in r['type']]
+    cumul_res = [r for r in results if r['category'] == 'cumulative']
+    cumul_sum = sum(r['prize'] for r in cumul_res)
+    gugan_sum = sum(r['prize'] for r in gugan_res)
+    bridge_sum = sum(r['prize'] for r in bridge_res)
 
     lines = ["", f"💰 예상 시상금: {total:,.0f}원"]
-
-    for r in results:
-        t = r["type"]
-
-        if t == "구간":
-            if r["prize"] > 0 or r.get("val", 0) > 0:
-                lines.append(f"  {r['name']}: {r['prize']:,.0f}원")
-                for d in r.get("prize_details", []):
-                    lines.append(f"    · {d['label']}: {d['amount']:,.0f}원")
-
-        elif t == "월브릿지":
+    if cumul_sum > 0 or gugan_sum > 0 or bridge_sum > 0:
+        parts = []
+        if cumul_sum > 0: parts.append(f"누계 {cumul_sum:,.0f}")
+        if gugan_sum > 0: parts.append(f"주차 {gugan_sum:,.0f}")
+        if bridge_sum > 0: parts.append(f"브릿지 {bridge_sum:,.0f}")
+        lines.append(f"  ({' + '.join(parts)})")
+    for r in gugan_res:
+        if r['prize'] > 0:
             lines.append(f"  {r['name']}: {r['prize']:,.0f}원")
-            lines.append(f"    {r['label_prev']} 실적: {r['val_prev']:,.0f}원")
-            lines.append(f"    {r['label_curr']} 실적: {r['val_curr']:,.0f}원")
-            if r.get("shortfall", 0) > 0 and r.get("target", 0) > 0:
-                lines.append(
-                    f"    🎯 목표 {r['target']:,.0f}원까지 {r['shortfall']:,.0f}원 부족"
-                )
-
-        elif t == "주차연속":
-            if r.get("has_prize") and r["prize"] > 0:
-                lines.append(f"  {r['name']}: {r['prize']:,.0f}원")
-            elif r.get("has_prize"):
-                lines.append(f"  {r['name']}: 0원 (추후 확정)")
-            else:
-                lines.append(f"  {r['name']}: 추후 확정")
-            tier3 = f"{r['tier_3w']:,.0f}원 구간" if r.get("tier_3w", 0) > 0 else "미달성"
-            lines.append(f"    3주 실적: {r['perf_3w']:,.0f}원 ({tier3})")
-            if r.get("perf_4w", 0) > 0:
-                lines.append(f"    4주 실적: {r['perf_4w']:,.0f}원")
-            if r.get("shortfall", 0) > 0:
-                lines.append(f"    🚀 목표까지 {r['shortfall']:,.0f}원 부족")
-
-        elif t == "누계":
-            lines.append(f"  {r['name']}: {r['prize']:,.0f}원")
-            for d in r.get("prize_details", []):
+            for d in r.get('prize_details', []):
                 lines.append(f"    · {d['label']}: {d['amount']:,.0f}원")
+    for r in bridge_res:
+        if r['prize'] > 0:
+            if r['type'] == '브릿지2':
+                lines.append(f"  {r['name']}: {r['prize']:,.0f}원 (당월 {int(r.get('curr_req',100000)//10000)}만 가동 시)")
+            elif r['type'] == '주차브릿지':
+                w3l = r.get('w3_label', '3주')
+                w4l = r.get('w4_label', '4주')
+                lines.append(f"  {r['name']}: {r['prize']:,.0f}원 ({w4l} 동일 가동 시)")
+            else:
+                lines.append(f"  {r['name']}: {r['prize']:,.0f}원")
+                for d in r.get('prize_details', []):
+                    lines.append(f"    · {d['label']}: {d['amount']:,.0f}원")
+    for r in cumul_res:
+        if r['prize'] > 0:
+            lines.append(f"  {r['name']}: {r['prize']:,.0f}원")
+            for d in r.get('prize_details', []):
+                lines.append(f"    · {d['label']}: {d['amount']:,.0f}원")
+    return '\n'.join(lines)
 
-    return "\n".join(lines)
 
-
-# ──────────────────────────────────────────────────────────────
-# 시상금 상세 카드 HTML (모바일 카드뷰 내부에 삽입됨)
-# ──────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════
+# 시상 카드 HTML (모바일 카드 뷰용)
+# ═══════════════════════════════════════════════════════
 def _prize_detail_sub_html(details):
     """시상금 항목이 2개 이상일 때 상세 내역 HTML."""
     if len(details) <= 1:
         return ""
     h = ""
     for d in details:
-        h += (
-            f'<div class="m-row"><span class="m-label" '
-            f'style="padding-left:10px;font-size:11px;">· {d["label"]}</span>'
-            f'<span class="m-val" style="font-size:11px;">{d["amount"]:,.0f}원</span></div>'
-        )
+        h += (f'<div class="m-row">'
+              f'<span class="m-label" style="padding-left:10px;font-size:11px;">· {d["label"]}</span>'
+              f'<span class="m-val" style="font-size:11px;">{d["amount"]:,.0f}원</span></div>')
     return h
 
 
 def build_prize_card_html(results, total):
+    """시상 결과를 모바일 카드 뷰용 HTML로 변환."""
     if not results:
         return ""
+    gugan_res = [r for r in results if r['category'] == 'weekly' and r['type'] == '구간']
+    bridge_res = [r for r in results if r['category'] == 'weekly' and '브릿지' in r['type']]
+    cumul_res = [r for r in results if r['category'] == 'cumulative']
+    cumul_sum = sum(r['prize'] for r in cumul_res)
+    gugan_sum = sum(r['prize'] for r in gugan_res)
+    bridge_sum = sum(r['prize'] for r in bridge_res)
 
-    gugan   = [r for r in results if r["type"] == "구간"]
-    bridges = [r for r in results if r["type"] == "월브릿지"]
-    wconsec = [r for r in results if r["type"] == "주차연속"]
-    cumuls  = [r for r in results if r["type"] == "누계"]
-
-    gugan_sum  = sum(r["prize"] for r in gugan)
-    bridge_sum = sum(r["prize"] for r in bridges)
-    wcon_sum   = sum(r["prize"] for r in wconsec)
-    cumul_sum  = sum(r["prize"] for r in cumuls)
-
-    h = (
-        '<div style="margin-top:8px; padding:10px; background:#fff8f0; '
-        'border-radius:10px; border:1px solid #ffd4a8;">'
-    )
-    h += (
-        f'<div style="font-weight:800;color:#d9232e;font-size:15px;margin-bottom:2px;">'
-        f'💰 총 시상금: {total:,.0f}원</div>'
-    )
-
-    parts = []
-    if gugan_sum > 0:  parts.append(f"주차 {gugan_sum:,.0f}")
-    if bridge_sum > 0: parts.append(f"브릿지 {bridge_sum:,.0f}")
-    if wcon_sum > 0:   parts.append(f"주차연속 {wcon_sum:,.0f}")
-    if cumul_sum > 0:  parts.append(f"누계 {cumul_sum:,.0f}")
-    if parts:
+    h = '<div style="margin-top:8px; padding:10px; background:#fff8f0; border-radius:10px; border:1px solid #ffd4a8;">'
+    h += f'<div style="font-weight:800;color:#d9232e;font-size:15px;margin-bottom:2px;">💰 총 시상금: {total:,.0f}원</div>'
+    if cumul_sum > 0 or gugan_sum > 0 or bridge_sum > 0:
+        parts = []
+        if cumul_sum > 0: parts.append(f"누계 {cumul_sum:,.0f}")
+        if gugan_sum > 0: parts.append(f"주차 {gugan_sum:,.0f}")
+        if bridge_sum > 0: parts.append(f"브릿지 {bridge_sum:,.0f}")
         h += f'<div style="font-size:11px;color:#888;margin-bottom:6px;">({" + ".join(parts)})</div>'
 
-    # 주차 시상
-    if gugan:
+    if gugan_res:
         h += '<div style="font-size:11px;color:#4e5968;font-weight:700;margin-top:4px;">📌 주차 시상</div>'
-        for r in gugan:
-            pz = f"{r['prize']:,.0f}원" if r["prize"] > 0 else "0원"
-            h += (
-                f'<div class="m-row"><span class="m-label">{r["name"]}</span>'
-                f'<span class="m-val" style="color:#d9232e;font-weight:700;">{pz}</span></div>'
-            )
-            h += _prize_detail_sub_html(r.get("prize_details", []))
+        for r in gugan_res:
+            pz = f"{r['prize']:,.0f}원" if r['prize'] > 0 else "0원"
+            h += f'<div class="m-row"><span class="m-label">{r["name"]}</span><span class="m-val" style="color:#888;font-weight:600;">{pz}</span></div>'
+            h += _prize_detail_sub_html(r.get('prize_details', []))
 
-    # 월 브릿지/연속가동
-    if bridges:
-        h += '<div style="font-size:11px;color:#d4380d;font-weight:700;margin-top:4px;">🌉 월 브릿지 / 연속가동</div>'
-        for r in bridges:
-            pz = f"{r['prize']:,.0f}원" if r["prize"] > 0 else "0원"
-            h += (
-                f'<div class="m-row"><span class="m-label">{r["name"]}</span>'
-                f'<span class="m-val" style="color:#d9232e;font-weight:700;">{pz}</span></div>'
-            )
-            lp, lc = r.get("label_prev", "전월"), r.get("label_curr", "당월")
-            h += (
-                f'<div class="m-row"><span class="m-label" style="padding-left:10px;font-size:11px;">'
-                f'· {lp} 실적</span><span class="m-val" style="font-size:11px;">{r["val_prev"]:,.0f}원</span></div>'
-            )
-            h += (
-                f'<div class="m-row"><span class="m-label" style="padding-left:10px;font-size:11px;">'
-                f'· {lc} 실적</span><span class="m-val" style="font-size:11px;">{r["val_curr"]:,.0f}원</span></div>'
-            )
-            if r.get("shortfall", 0) > 0 and r.get("target", 0) > 0:
-                h += (
-                    f'<div class="m-row"><span class="m-label" style="padding-left:10px;font-size:10px;color:#888;">'
-                    f'🎯 목표 {r["target"]:,.0f}원까지 {r["shortfall"]:,.0f}원 부족</span>'
-                    f'<span class="m-val"></span></div>'
-                )
-
-    # 주차연속가동
-    if wconsec:
-        h += '<div style="font-size:11px;color:#c05621;font-weight:700;margin-top:4px;">🔥 주차연속가동 (3~4주)</div>'
-        for r in wconsec:
-            if r.get("has_prize") and r["prize"] > 0:
-                pz = f"{r['prize']:,.0f}원"
-            elif r.get("has_prize"):
-                pz = "0원"
+    if bridge_res:
+        h += '<div style="font-size:11px;color:#d4380d;font-weight:700;margin-top:4px;">🌉 브릿지 시상</div>'
+        for r in bridge_res:
+            pz = f"{r['prize']:,.0f}원" if r['prize'] > 0 else "0원"
+            if r['type'] == '브릿지2':
+                label = f"{r['name']}<br><span style='font-size:10px;color:#888;'>(당월 {int(r.get('curr_req',100000)//10000)}만 가동 시)</span>"
+                h += f'<div class="m-row"><span class="m-label">{label}</span><span class="m-val" style="color:#d9232e;font-weight:700;">{pz}</span></div>'
+            elif r['type'] == '주차브릿지':
+                w3l = r.get('w3_label', '3주')
+                w4l = r.get('w4_label', '4주')
+                tier_txt = f"{r.get('tier',0):,.0f}원" if r.get('tier', 0) > 0 else "미달성"
+                label = f"{r['name']}<br><span style='font-size:10px;color:#888;'>({w4l} 동일 가동 시)</span>"
+                h += f'<div class="m-row"><span class="m-label">{label}</span><span class="m-val" style="color:#d9232e;font-weight:700;">{pz}</span></div>'
+                h += f'<div class="m-row"><span class="m-label" style="padding-left:10px;font-size:11px;">· {w3l} 실적 (구간: {tier_txt})</span><span class="m-val" style="font-size:11px;">{r.get("val_w3",0):,.0f}원</span></div>'
             else:
-                pz = "추후 확정"
-            h += (
-                f'<div class="m-row"><span class="m-label">{r["name"]}</span>'
-                f'<span class="m-val" style="color:#d9232e;font-weight:700;">{pz}</span></div>'
-            )
-            tier3 = f"{r['tier_3w']:,.0f}원 구간" if r.get("tier_3w", 0) > 0 else "미달성"
-            h += (
-                f'<div class="m-row"><span class="m-label" style="padding-left:10px;font-size:11px;">'
-                f'· 3주 실적 ({tier3})</span>'
-                f'<span class="m-val" style="font-size:11px;">{r.get("perf_3w", 0):,.0f}원</span></div>'
-            )
-            if r.get("perf_4w", 0) > 0:
-                h += (
-                    f'<div class="m-row"><span class="m-label" style="padding-left:10px;font-size:11px;">'
-                    f'· 4주 실적</span>'
-                    f'<span class="m-val" style="font-size:11px;">{r["perf_4w"]:,.0f}원</span></div>'
-                )
-            if r.get("shortfall", 0) > 0:
-                h += (
-                    f'<div class="m-row"><span class="m-label" style="padding-left:10px;font-size:10px;color:#888;">'
-                    f'🚀 목표까지 {r["shortfall"]:,.0f}원 부족</span>'
-                    f'<span class="m-val"></span></div>'
-                )
+                h += f'<div class="m-row"><span class="m-label">{r["name"]}</span><span class="m-val" style="color:#d9232e;font-weight:700;">{pz}</span></div>'
+                h += _prize_detail_sub_html(r.get('prize_details', []))
 
-    # 월 누계
-    if cumuls:
-        h += '<div style="font-size:11px;color:#2B6CB0;font-weight:700;margin-top:4px;">📈 월 누계</div>'
-        for r in cumuls:
-            pz = f"{r['prize']:,.0f}원" if r["prize"] > 0 else "0원"
-            h += (
-                f'<div class="m-row"><span class="m-label">{r["name"]}</span>'
-                f'<span class="m-val" style="color:#d9232e;font-weight:700;">{pz}</span></div>'
-            )
-            h += _prize_detail_sub_html(r.get("prize_details", []))
+    if cumul_res:
+        h += '<div style="font-size:11px;color:#2B6CB0;font-weight:700;margin-top:4px;">📈 누계 시상</div>'
+        for r in cumul_res:
+            pz = f"{r['prize']:,.0f}원" if r['prize'] > 0 else "0원"
+            h += f'<div class="m-row"><span class="m-label">{r["name"]}</span><span class="m-val" style="color:#d9232e;font-weight:700;">{pz}</span></div>'
+            h += _prize_detail_sub_html(r.get('prize_details', []))
 
-    h += "</div>"
+    h += '</div>'
     return h
