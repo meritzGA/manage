@@ -32,6 +32,7 @@ def _apply_autoload_result(result):
     st.session_state['df_merged'] = result['df_merged']
     for k, v in result['config'].items():
         st.session_state[k] = v
+    st.session_state['layout'] = result.get('layout')
     st.session_state['_autoload_info'] = {
         'detected_stage': result['detected_stage'],
         'current_month':  result['current_month'],
@@ -79,6 +80,44 @@ def render_admin_view():
         n_rows = len(df)
         n_cols = len(df.columns)
         st.caption(f"병합 결과: **{n_rows:,}**행 × **{n_cols}**열")
+
+    # ─────────────────────────────────────────────────
+    # 1.5 레이아웃 진단 (두 축 분리 + 죽은 컬럼)
+    # ─────────────────────────────────────────────────
+    layout = st.session_state.get('layout')
+    if layout and 'error' not in layout:
+        st.header("1.5 🧭 레이아웃 진단 (자동 정규화)")
+
+        weeks = layout.get('active_weeks', [])
+        st.markdown(f"**활성 주차:** {'· '.join(str(w) + '주' for w in weeks) if weeks else '(없음)'}")
+
+        tracks = layout.get('period', {}).get('tracks', [])
+        if tracks:
+            st.markdown("**기간 트랙 (브릿지·연속가동 — 주차 아님):**")
+            for t in tracks:
+                used = ', '.join(f"`{v}`" for v in t.get('cols', {}).values() if v)
+                st.markdown(f"- **{t.get('label','')}** ← {used}")
+
+        dropped_cols = layout.get('dropped', {}).get('admin_cols', [])
+        dropped_items = layout.get('dropped', {}).get('prize_items', [])
+        if dropped_cols or dropped_items:
+            with st.expander(
+                f"⚠️ 이번 데이터에서 자동 제거됨 "
+                f"(컬럼 {len(dropped_cols)} · 시상 {len(dropped_items)})",
+                expanded=False,
+            ):
+                if dropped_cols:
+                    st.markdown("**표시 컬럼:**")
+                    for d in dropped_cols:
+                        st.markdown(f"- `{d.get('display','')}` — {d.get('reason','')}")
+                if dropped_items:
+                    st.markdown("**시상 항목:**")
+                    for d in dropped_items:
+                        st.markdown(f"- [{d.get('block','')}] {d.get('item','')} — {d.get('reason','')}")
+        else:
+            st.caption("제거된 항목 없음 (config와 데이터 일치).")
+    elif layout and 'error' in layout:
+        st.warning(f"레이아웃 정규화 경고: {layout['error']}")
 
     # ─────────────────────────────────────────────────
     # 2. Stage 수동 오버라이드

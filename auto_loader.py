@@ -1,18 +1,18 @@
 """
 auto_loader.py — 데이터 자동 로더 + stage 감지 + 설정 머지
 
-[성능 최적화 (2026-05-27)]
-  - @st.cache_data 로 파일별 + 머지 결과 캐싱 → 매 rerun/새 세션마다 다시 안 읽음
-  - parquet 우선 로딩 (xlsx보다 30~50배 빠름) → *.parquet 있으면 그걸 사용
-  - calamine 엔진 폴백 (openpyxl보다 5~10배 빠름) → parquet 없을 때 사용
-
 [작동 순서]
   1. data/ 폴더에서 최신 파일 3개 자동 선택 (파일명 YYYYMMDD 기준)
-     - 같은 YYYYMMDD에 .parquet, .xlsx 둘 다 있으면 .parquet 우선
   2. 3개 파일 outer merge
   3. 병합된 컬럼 + 기준년월로 current_month & stage 자동 감지
-  4. config/base.json + config/stages/{stage}.json 로드
-  5. {m}, {m-1} 플레이스홀더 치환
+  4. config/base.json + config/stages/{stage}.json 로드 (JSON 없으면 .pkl 폴백)
+  5. 문자열의 {m}, {m-1} 플레이스홀더를 현재 월 숫자로 치환
+  6. base + stage 머지 → 앱 session_state에 주입할 dict 반환
+
+[파일명 규칙]
+  data/MC_LIST_OUT_YYYYMMDD.xlsx
+  data/PRIZE_6_BRIDGE_OUT_YYYYMMDD.xlsx
+  data/PRIZE_SUM_OUT_YYYYMMDD.xlsx
 """
 import os
 import re
@@ -20,21 +20,13 @@ import glob
 import json
 import pickle
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 from collections import Counter
 
-# Streamlit 캐싱 — Streamlit이 없는 환경에서도 import 가능하도록 안전 폴백
 try:
-    import streamlit as st
-    _cache_data = st.cache_data
+    import layout_resolver as _lr
 except Exception:
-    def _cache_data(*args, **kwargs):
-        # decorator 인자 유무 모두 처리
-        if len(args) == 1 and callable(args[0]) and not kwargs:
-            return args[0]
-        def deco(fn):
-            return fn
-        return deco
+    _lr = None
 
 # ──────────────────────────────────────────────────────────────
 # 경로 설정
@@ -43,66 +35,51 @@ DATA_DIR = "data"
 CONFIG_DIR = "config"
 STAGES_DIR = os.path.join(CONFIG_DIR, "stages")
 
+# 파일명 패턴 (prefix, glob)
 FILE_PATTERNS = [
-    ("MC_LIST_OUT",        ["MCLISTOUT"]),
-    ("PRIZE_6_BRIDGE_OUT", ["PRIZE6BRIDGEOUT"]),
-    ("PRIZE_SUM_OUT",      ["PRIZESUMOUT"]),
+    ("MC_LIST_OUT",        "MC_LIST_OUT_*.xlsx"),
+    ("PRIZE_6_BRIDGE_OUT", "PRIZE_6_BRIDGE_OUT_*.xlsx"),
+    ("PRIZE_SUM_OUT",      "PRIZE_SUM_OUT_*.xlsx"),
 ]
 
+# 같은 논리 컬럼(설계사 조직코드)이 파일마다 이름이 다름.
+# MC_LIST → 현재대리점설계사조직코드 / PRIZE_* → 대리점설계사조직코드
+KEY_ALIASES = ["대리점설계사조직코드", "현재대리점설계사조직코드"]
+
+
+def _resolve_key(df, preferred, aliases=KEY_ALIASES):
+    """preferred가 df에 있으면 그대로, 없으면 alias 중 실재하는 컬럼으로 대체."""
+    if preferred and preferred in df.columns:
+        return preferred
+    for a in aliases:
+        if a in df.columns:
+            return a
+    raise KeyError(f"병합키를 찾을 수 없습니다. 후보: {[preferred] + list(aliases)}")
+
 
 # ──────────────────────────────────────────────────────────────
-# 파일 스캔 — parquet 우선
+# 데이터 파일 스캔
 # ──────────────────────────────────────────────────────────────
-def _normalize_filename(name):
-    stem = os.path.splitext(os.path.basename(name))[0]
-    return re.sub(r"[\s_\-]+", "", stem).upper()
-
-
 def _extract_yyyymmdd(filepath):
     m = re.search(r"(\d{8})", os.path.basename(filepath))
     return m.group(1) if m else "00000000"
 
 
-def _pick_best_format(candidates):
-    """같은 YYYYMMDD 그룹에서 parquet > xlsx 우선순위로 선택."""
-    if not candidates:
-        return None
-    # 최신 날짜 그룹만 추출
-    candidates_sorted = sorted(
-        candidates,
-        key=lambda p: (_extract_yyyymmdd(p), os.path.getmtime(p)),
-        reverse=True,
-    )
-    top_date = _extract_yyyymmdd(candidates_sorted[0])
-    top_group = [p for p in candidates_sorted if _extract_yyyymmdd(p) == top_date]
-    # parquet 우선
-    parquets = [p for p in top_group if p.lower().endswith(".parquet")]
-    if parquets:
-        return parquets[0]
-    return top_group[0]
-
-
 def find_latest_data_files():
-    """각 유형별 최신 파일 1개씩 반환 (parquet 우선, xlsx/xls 폴백)."""
-    all_files = (
-        glob.glob(os.path.join(DATA_DIR, "*.parquet")) +
-        glob.glob(os.path.join(DATA_DIR, "*.xlsx")) +
-        glob.glob(os.path.join(DATA_DIR, "*.xls"))
-    )
-    all_files = [f for f in all_files if not os.path.basename(f).startswith("~$")]
-
+    """각 패턴별 최신 파일(YYYYMMDD 기준) 1개씩 반환."""
     result = {}
-    for key, tokens in FILE_PATTERNS:
-        candidates = [
-            f for f in all_files
-            if all(tok in _normalize_filename(f) for tok in tokens)
-        ]
-        result[key] = _pick_best_format(candidates)
+    for key, pattern in FILE_PATTERNS:
+        files = glob.glob(os.path.join(DATA_DIR, pattern))
+        if not files:
+            result[key] = None
+            continue
+        files.sort(key=_extract_yyyymmdd, reverse=True)
+        result[key] = files[0]
     return result
 
 
 # ──────────────────────────────────────────────────────────────
-# 엑셀/parquet 로드 + 인코딩 정리
+# 엑셀 로드 + 인코딩 정리 (기존 app.py 로직 재사용)
 # ──────────────────────────────────────────────────────────────
 def _decode_excel_text(val):
     if pd.isna(val):
@@ -129,22 +106,8 @@ def _clean_key(val):
     return s
 
 
-def _read_excel_fast(path):
-    """xlsx를 가능한 한 빠르게 읽기 — calamine 우선, openpyxl 폴백."""
-    try:
-        return pd.read_excel(path, engine="calamine")
-    except Exception:
-        return pd.read_excel(path, engine="openpyxl")
-
-
-# 파일 경로 + mtime 키로 캐싱 — 새 날짜 파일 push되면 자동 무효화
-@_cache_data(show_spinner=False)
-def _load_file_clean(path, _mtime):  # _mtime은 캐시 키 변동용
-    """parquet/xlsx 자동 판별 + 인코딩 정리 + 캐싱."""
-    if path.lower().endswith(".parquet"):
-        df = pd.read_parquet(path)
-    else:
-        df = _read_excel_fast(path)
+def _load_excel_clean(path):
+    df = pd.read_excel(path)
     df.columns = [_decode_excel_text(c) if isinstance(c, str) else c for c in df.columns]
     for c in df.columns:
         if pd.api.types.is_string_dtype(df[c]):
@@ -152,65 +115,28 @@ def _load_file_clean(path, _mtime):  # _mtime은 캐시 키 변동용
     return df
 
 
-def _load_excel_clean(path):
-    """외부에서 호출하는 안정 API. 내부는 캐시된 _load_file_clean 사용."""
-    try:
-        mtime = os.path.getmtime(path)
-    except OSError:
-        mtime = 0
-    return _load_file_clean(path, mtime)
-
-
 # ──────────────────────────────────────────────────────────────
-# merge key 자동 해석
+# 3개 파일 outer merge (기존 app.py 병합 로직 그대로)
 # ──────────────────────────────────────────────────────────────
-_MERGE_KEY_FALLBACKS = {
-    "대리점설계사조직코드":   ["대리점설계사조직코드", "현재대리점설계사조직코드"],
-    "현재대리점설계사조직코드": ["현재대리점설계사조직코드", "대리점설계사조직코드"],
-}
+def merge_three_files(f1, f2, f3, key1, key2, key3):
+    df1 = _load_excel_clean(f1)
+    df2 = _load_excel_clean(f2)
+    df3 = _load_excel_clean(f3)
 
+    # 파일별 실재 컬럼명으로 병합키 재해석 (이름 드리프트 방어)
+    key1 = _resolve_key(df1, key1)
+    key2 = _resolve_key(df2, key2)
+    key3 = _resolve_key(df3, key3)
 
-def _resolve_merge_key(df, requested_key, file_label):
-    if requested_key in df.columns:
-        return requested_key
-    for cand in _MERGE_KEY_FALLBACKS.get(requested_key, []):
-        if cand in df.columns:
-            return cand
-    for c in df.columns:
-        if "대리점설계사조직코드" in c:
-            return c
-    raise KeyError(
-        f"{file_label} 파일에서 merge key '{requested_key}' 또는 대체 후보를 찾지 못했습니다. "
-        f"실제 컬럼 일부: {list(df.columns)[:10]}..."
-    )
-
-
-# ──────────────────────────────────────────────────────────────
-# 3개 파일 outer merge — 캐시 가능
-# ──────────────────────────────────────────────────────────────
-@_cache_data(show_spinner="데이터 머지 중...", ttl=3600)
-def _merge_three_cached(f1, f2, f3, m1, m2, m3, key1, key2, key3):
-    """경로+mtime 기반 캐싱. 같은 파일 조합이면 머지 결과 즉시 반환."""
-    df1 = _load_file_clean(f1, m1)
-    df2 = _load_file_clean(f2, m2)
-    df3 = _load_file_clean(f3, m3)
-
-    k1 = _resolve_merge_key(df1, key1, "MC_LIST_OUT")
-    k2 = _resolve_merge_key(df2, key2, "PRIZE_6_BRIDGE_OUT")
-    k3 = _resolve_merge_key(df3, key3, "PRIZE_SUM_OUT")
-
-    df1 = df1.copy()
-    df2 = df2.copy()
-    df3 = df3.copy()
-
-    df1["merge_key1"] = df1[k1].apply(_clean_key)
-    df2["merge_key2"] = df2[k2].apply(_clean_key)
+    df1["merge_key1"] = df1[key1].apply(_clean_key)
+    df2["merge_key2"] = df2[key2].apply(_clean_key)
     df_merged = pd.merge(
         df1, df2,
         left_on="merge_key1", right_on="merge_key2",
         how="outer", suffixes=("_파일1", "_파일2"),
     )
 
+    # 중복 컬럼 combine_first
     for c1 in [c for c in df_merged.columns if c.endswith("_파일1")]:
         base = c1.replace("_파일1", "")
         c2 = base + "_파일2"
@@ -220,7 +146,7 @@ def _merge_three_cached(f1, f2, f3, m1, m2, m3, key1, key2, key3):
 
     df_merged["_unified_search_key"] = df_merged["merge_key1"].combine_first(df_merged["merge_key2"])
 
-    df3["merge_key3"] = df3[k3].apply(_clean_key)
+    df3["merge_key3"] = df3[key3].apply(_clean_key)
     df_merged = pd.merge(
         df_merged, df3,
         left_on="_unified_search_key", right_on="merge_key3",
@@ -240,16 +166,8 @@ def _merge_three_cached(f1, f2, f3, m1, m2, m3, key1, key2, key3):
     return df_merged
 
 
-def merge_three_files(f1, f2, f3, key1, key2, key3):
-    """캐시 wrapper."""
-    def _mt(p):
-        try: return os.path.getmtime(p)
-        except OSError: return 0
-    return _merge_three_cached(f1, f2, f3, _mt(f1), _mt(f2), _mt(f3), key1, key2, key3)
-
-
 # ──────────────────────────────────────────────────────────────
-# 현재 월 / stage 감지
+# 현재 월 감지 (기준년월 최빈값)
 # ──────────────────────────────────────────────────────────────
 def detect_current_month(df):
     if "기준년월" in df.columns:
@@ -259,7 +177,7 @@ def detect_current_month(df):
             v_clean = v.replace(".", "").replace("-", "").strip()
             if v_clean.endswith(".0"):
                 v_clean = v_clean[:-2]
-            if len(v_clean) >= 6:
+            if len(v_clean) >= 6:  # YYYYMM...
                 try:
                     months.append(int(v_clean[4:6]))
                 except Exception:
@@ -274,13 +192,17 @@ def detect_current_month(df):
     return datetime.now().month
 
 
-MAX_WEEK_SUPPORTED = 6
+# ──────────────────────────────────────────────────────────────
+# stage 자동 감지 — "어느 주차까지 실적이 찍혔는지" 기준 (1~6주차 일반화)
+# ──────────────────────────────────────────────────────────────
+MAX_WEEK_SUPPORTED = 6  # 필요 시 7, 8도 확장 가능. config/stages/stage_N_weekN.json 있어야 함.
 
 
 def detect_stage(df):
     cols = set(df.columns)
     has_monthly_연속 = any(re.match(r"^연속가동실적_\d+월$", c) for c in cols)
 
+    # 컬럼이 있어도 값이 전부 0이면 "아직 집계 전" — 상위 stage로 안 올라감
     def _has_value(col):
         if col not in df.columns:
             return False
@@ -293,6 +215,7 @@ def detect_stage(df):
         except Exception:
             return False
 
+    # 값이 실제로 찍힌 가장 높은 주차 찾기 (2주차 이상부터 체크 — 1주차는 base)
     max_week_with_value = 0
     for n in range(2, MAX_WEEK_SUPPORTED + 1):
         col = f"실적_{n}주차"
@@ -302,11 +225,15 @@ def detect_stage(df):
     if max_week_with_value >= 2:
         return f"stage_{max_week_with_value}_week{max_week_with_value}"
 
+    # 아직 2주차 값이 없으면 1주차 단계
     if "실적_1주차" in cols or has_monthly_연속:
         return "stage_1_week1_early"
     return "stage_1_week1_early"
 
 
+# ──────────────────────────────────────────────────────────────
+# 플레이스홀더 치환 ({m} → current_month, {m-1} → prev_month)
+# ──────────────────────────────────────────────────────────────
 def substitute_placeholders(obj, current_month):
     prev_m = current_month - 1 if current_month > 1 else 12
     if isinstance(obj, dict):
@@ -314,10 +241,14 @@ def substitute_placeholders(obj, current_month):
     if isinstance(obj, list):
         return [substitute_placeholders(v, current_month) for v in obj]
     if isinstance(obj, str):
+        # {m-1} 먼저 (m을 포함하므로)
         return obj.replace("{m-1}", str(prev_m)).replace("{m}", str(current_month))
     return obj
 
 
+# ──────────────────────────────────────────────────────────────
+# JSON 우선, PKL 폴백 로더
+# ──────────────────────────────────────────────────────────────
 def _load_json_or_pkl(json_path, pkl_path):
     if os.path.exists(json_path):
         with open(json_path, "r", encoding="utf-8") as f:
@@ -350,6 +281,9 @@ def list_available_stages():
     return sorted(stages)
 
 
+# ──────────────────────────────────────────────────────────────
+# base + stage 머지 → 앱이 쓰는 config dict
+# ──────────────────────────────────────────────────────────────
 def merge_base_and_stage(base, stage):
     if not base:
         return {}
@@ -387,6 +321,11 @@ def merge_base_and_stage(base, stage):
 # 메인 진입점
 # ──────────────────────────────────────────────────────────────
 def auto_load(force_stage=None):
+    """
+    Returns:
+        성공: {'df_merged', 'config', 'detected_stage', 'current_month', 'files'}
+        실패: {'error': 메시지}
+    """
     files = find_latest_data_files()
     missing = [k for k, v in files.items() if not v]
     if missing:
@@ -413,6 +352,7 @@ def auto_load(force_stage=None):
 
     stage = load_stage_config(stage_id)
 
+    # 폴백: 감지된 stage 파일이 없으면 가장 가까운 하위 stage로 내려감
     if not stage:
         available = set(list_available_stages())
         m = re.match(r"stage_(\d+)_week\d+", stage_id)
@@ -437,19 +377,23 @@ def auto_load(force_stage=None):
 
     m = re.search(r"(\d{8})", os.path.basename(files["MC_LIST_OUT"]))
     if m:
-        try:
-            collected = datetime.strptime(m.group(1), "%Y%m%d")
-            data_dt = collected - timedelta(days=1)
-            config["data_date"] = data_dt.strftime("%Y.%m.%d")
-        except ValueError:
-            ymd = m.group(1)
-            config["data_date"] = f"{ymd[:4]}.{ymd[4:6]}.{ymd[6:8]}"
+        ymd = m.group(1)
+        config["data_date"] = f"{ymd[:4]}.{ymd[4:6]}.{ymd[6:8]}"
     else:
-        config["data_date"] = (datetime.now() - timedelta(days=1)).strftime("%Y.%m.%d")
+        config["data_date"] = datetime.now().strftime("%Y.%m.%d")
+
+    # 두 축(주차/기간) 레이아웃 정규화 — 죽은 컬럼·비활성 주차 자동 제거
+    layout = None
+    if _lr is not None:
+        try:
+            layout = _lr.build_layout(df, config)
+        except Exception as e:
+            layout = {"error": f"layout 생성 실패: {e}"}
 
     return {
         "df_merged":      df,
         "config":         config,
+        "layout":         layout,
         "detected_stage": stage_id,
         "current_month":  current_month,
         "files":          files,
