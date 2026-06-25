@@ -452,42 +452,9 @@ elif menu == "매니저 화면 (로그인)":
                         st.warning(f"⚠️ 시상금 계산 중 오류: {prize_err}")
 
                     col_groups = st.session_state.get('col_groups', [])
-
-                    # 주차 표 / 기간(브릿지·연속가동) 표 분리
-                    _layout2 = st.session_state.get('layout') or {}
-                    _period = _layout2.get('period', {}) or {}
-                    _period_disp = [c.get('display_name', c.get('col', ''))
-                                    for c in _period.get('admin_cols', [])]
-                    _period_present = [c for c in _period_disp if c in final_df.columns]
-
-                    if _period_present:
-                        _id_cols = [c for c in final_df.columns
-                                    if c in ('순번', '맞춤분류')
-                                    or any(k in c for k in ['지사명', '코드', '이름', '팀장'])]
-                        _weekly_cols = [c for c in final_df.columns if c not in _period_present]
-                        _weekly_df = final_df[_weekly_cols].copy()
-                        _period_view = list(dict.fromkeys(_id_cols + _period_present))
-                        _period_df = final_df[_period_view].copy()
-
-                        _weekly_groups = (_layout2.get('weekly', {}) or {}).get('col_groups', col_groups)
-                        _period_groups = _period.get('col_groups', [])
-
-                        st.markdown("##### 📆 주차별 실적")
-                        components.html(
-                            render_html_table(_weekly_df, col_groups=_weekly_groups,
-                                              prize_data_map=prize_data_map),
-                            height=800, scrolling=False)
-
-                        st.markdown("##### 🌉 기간 시책 (브릿지 · 연속가동 — 주차 아님)")
-                        components.html(
-                            render_html_table(_period_df, col_groups=_period_groups,
-                                              prize_data_map=None),
-                            height=460, scrolling=False)
-                    else:
-                        # 폴백: 기간 컬럼이 없으면 기존 단일 표
-                        table_html = render_html_table(final_df, col_groups=col_groups,
-                                                       prize_data_map=prize_data_map)
-                        components.html(table_html, height=800, scrolling=False)
+                    table_html = render_html_table(final_df, col_groups=col_groups,
+                                                   prize_data_map=prize_data_map)
+                    components.html(table_html, height=800, scrolling=False)
 
             except Exception as e:
                 st.error(f"데이터 처리 중 오류가 발생했습니다: {e}")
