@@ -67,21 +67,21 @@
   "admin_cols_common": [
     {
       "col": "대리점지사명",
-      "fallback_col": "",
+      "fallback_col": "현재대리점지사명",
       "display_name": "대리점지사명",
       "type": "텍스트",
       "condition": ""
     },
     {
       "col": "대리점설계사조직코드",
-      "fallback_col": "",
+      "fallback_col": "현재대리점설계사조직코드",
       "display_name": "팀장님 코드",
       "type": "텍스트",
       "condition": ""
     },
     {
       "col": "대리점설계사명",
-      "fallback_col": "",
+      "fallback_col": "현재대리점설계사조직명",
       "display_name": "팀장님 이름",
       "type": "텍스트",
       "condition": ""
